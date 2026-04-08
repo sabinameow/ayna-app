@@ -103,9 +103,9 @@ We are developing this project following the Software Development Life Cycle (SD
 
 ## Notes
 
-The backend requires further development (AI integration, subscriptions, articles, notifications, testing, and deployment are upcoming sprints). The current repository contains only the backend. The React Native frontend will be developed and added in the upcoming sprints alongside AI integration, subscriptions, notifications, and deployment.
+The backend requires further development (AI integration, subscriptions, articles, notifications, testing, and deployment are upcoming sprints). The current repository contains only the backend. The mail credentials are not added and mail verification is not tested yet, this will be done closer to deployment.  The React Native frontend will be developed and added in the upcoming sprints alongside AI integration, subscriptions, notifications, and deployment.
 
-To simplify the setup process, the `.env` file is included in the repository since it currently contains no sensitive credentials. It will be removed once email credentials and production secrets are added. This should not be an issue as the system will be deployed before the final presentation. During the presentation, all work from the first to the last stage of SDLC will be demonstrated.
+During the presentation, all work from the first to the last stage of SDLC will be demonstrated.
 
 ---
 
