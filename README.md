@@ -6,6 +6,8 @@ Ayna.app – every day reflects you.
 
 Ayna is a clinical information system designed for gynecological offices and women's health clinics. Patients track their menstrual cycles and symptoms, doctors analyze data and prescribe treatments, and an AI agent assists with pattern analysis and personalized recommendations.
 
+Our project is supported by a practicing gynecologist, Ulzhan Bakytovna, to ensure clear problem framing.
+
 ### Roles
 
 **Patient**: self-registers, tracks menstrual cycles, logs mood and symptoms, books appointments, receives AI insights, chats with manager, views doctor's prescriptions (read-only).
