@@ -24,7 +24,6 @@ from backend.app.models.test_requirement import SymptomTestMapping
 
 config = context.config
 
-# Convert asyncpg URL to sync psycopg2 and strip all query params
 db_url = settings.DATABASE_URL
 db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
 parsed = urlparse(db_url)
