@@ -1,7 +1,7 @@
 from asgiref.sync import async_to_sync
 from celery.utils.log import get_task_logger
 from backend.app.celery_app import celery_app
-from backend.app.mail import mail, create_message
+from backend.app.auth.mail import mail, create_message
 from backend.app.config import settings
 
 logger = get_task_logger(__name__)

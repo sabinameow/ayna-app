@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Text
+from sqlalchemy import Enum, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,10 +17,11 @@ class ChatSession(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"))
     manager_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("managers.id"))
-    status: Mapped[str] = mapped_column(Enum(ChatSessionStatus), default=ChatSessionStatus.ACTIVE)
+    status: Mapped[str] = mapped_column(Enum(ChatSessionStatus, values_callable=lambda x: [e.value for e in x]),
+                                        default=ChatSessionStatus.ACTIVE)
     summary = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    closed_at = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    closed_at = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     patient = relationship("Patient", backref="chat_sessions")
     manager = relationship("Manager", backref="chat_sessions")
@@ -32,7 +35,7 @@ class ChatMessage(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_sessions.id"))
     sender_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     content: Mapped[str] = mapped_column(Text)
-    sent_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
     sender = relationship("User")

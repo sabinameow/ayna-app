@@ -1,7 +1,7 @@
 """initial
 
 Revision ID: 69b8953dd983
-Revises: 
+Revises:
 Create Date: 2026-04-08 13:23:25.290439
 
 """
@@ -27,7 +27,7 @@ def upgrade() -> None:
     sa.Column('summary', sa.Text(), nullable=True),
     sa.Column('category', sa.String(length=100), nullable=False),
     sa.Column('requires_subscription', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('subscription_plans',
@@ -49,11 +49,11 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('phone', sa.String(length=20), nullable=True),
     sa.Column('hashed_password', sa.String(length=255), nullable=False),
-    sa.Column('role', sa.Enum('PATIENT', 'DOCTOR', 'MANAGER', name='userrole'), nullable=False),
+    sa.Column('role', sa.Enum('patient', 'doctor', 'manager', name='userrole'), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('is_verified', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('email'),
     sa.UniqueConstraint('phone')
@@ -75,7 +75,7 @@ def upgrade() -> None:
     sa.Column('title', sa.String(length=200), nullable=False),
     sa.Column('body', sa.Text(), nullable=False),
     sa.Column('is_read', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -126,8 +126,8 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('doctor_id', sa.UUID(), nullable=False),
-    sa.Column('scheduled_at', sa.DateTime(), nullable=False),
-    sa.Column('status', sa.Enum('PENDING', 'CONFIRMED', 'CANCELLED', 'COMPLETED', name='appointmentstatus'), nullable=False),
+    sa.Column('scheduled_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('status', sa.Enum('pending', 'confirmed', 'cancelled', 'completed', name='appointmentstatus'), nullable=False),
     sa.Column('reason', sa.Text(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('selected_symptom_ids', postgresql.JSON(astext_type=sa.Text()), nullable=True),
@@ -140,10 +140,10 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('manager_id', sa.UUID(), nullable=False),
-    sa.Column('status', sa.Enum('ACTIVE', 'CLOSED', name='chatsessionstatus'), nullable=False),
+    sa.Column('status', sa.Enum('active', 'closed', name='chatsessionstatus'), nullable=False),
     sa.Column('summary', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
-    sa.Column('closed_at', sa.DateTime(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('closed_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['manager_id'], ['managers.id'], ),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -152,7 +152,7 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('date', sa.Date(), nullable=False),
-    sa.Column('flow_intensity', sa.Enum('NONE', 'LIGHT', 'MEDIUM', 'HEAVY', name='flowintensity'), nullable=False),
+    sa.Column('flow_intensity', sa.Enum('none', 'light', 'medium', 'heavy', name='flowintensity'), nullable=False),
     sa.Column('temperature', sa.String(length=10), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
@@ -163,7 +163,7 @@ def upgrade() -> None:
     sa.Column('doctor_id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctors.id'], ),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -199,7 +199,7 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('date', sa.Date(), nullable=False),
-    sa.Column('mood', sa.Enum('GREAT', 'GOOD', 'OKAY', 'BAD', 'TERRIBLE', name='moodlevel'), nullable=False),
+    sa.Column('mood', sa.Enum('great', 'good', 'okay', 'bad', 'terrible', name='moodlevel'), nullable=False),
     sa.Column('energy_level', sa.Integer(), nullable=False),
     sa.Column('stress_level', sa.Integer(), nullable=False),
     sa.Column('sleep_quality', sa.Integer(), nullable=False),
@@ -222,9 +222,9 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
     sa.Column('plan_id', sa.UUID(), nullable=False),
-    sa.Column('status', sa.Enum('ACTIVE', 'EXPIRED', 'CANCELLED', name='subscriptionstatus'), nullable=False),
-    sa.Column('started_at', sa.DateTime(), nullable=False),
-    sa.Column('expires_at', sa.DateTime(), nullable=False),
+    sa.Column('status', sa.Enum('active', 'expired', 'cancelled', name='subscriptionstatus'), nullable=False),
+    sa.Column('started_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], ),
     sa.ForeignKeyConstraint(['plan_id'], ['subscription_plans.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -234,7 +234,7 @@ def upgrade() -> None:
     sa.Column('session_id', sa.UUID(), nullable=False),
     sa.Column('sender_id', sa.UUID(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('sent_at', sa.DateTime(), nullable=False),
+    sa.Column('sent_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['sender_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['session_id'], ['chat_sessions.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -243,7 +243,7 @@ def upgrade() -> None:
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('medication_id', sa.UUID(), nullable=False),
     sa.Column('patient_id', sa.UUID(), nullable=False),
-    sa.Column('taken_at', sa.DateTime(), nullable=False),
+    sa.Column('taken_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('skipped', sa.Boolean(), nullable=False),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['medication_id'], ['medications.id'], ),

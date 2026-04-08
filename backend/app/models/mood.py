@@ -15,7 +15,7 @@ class MoodEntry(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"))
     date: Mapped[date] = mapped_column(Date)
-    mood: Mapped[str] = mapped_column(Enum(MoodLevel))
+    mood: Mapped[str] = mapped_column(Enum(MoodLevel, values_callable=lambda x: [e.value for e in x]))
     energy_level: Mapped[int] = mapped_column(Integer)
     stress_level: Mapped[int] = mapped_column(Integer)
     sleep_quality: Mapped[int] = mapped_column(Integer)

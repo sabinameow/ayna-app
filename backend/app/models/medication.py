@@ -1,7 +1,9 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,7 +35,7 @@ class MedicationLog(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     medication_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("medications.id"))
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"))
-    taken_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    taken_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
     skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     notes = mapped_column(Text, nullable=True)
 

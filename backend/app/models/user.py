@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, String
+from sqlalchemy import Boolean, Enum, String
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,11 +17,14 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(String(20), unique=True, nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(Enum(UserRole))
+    role: Mapped[str] = mapped_column(Enum(UserRole, values_callable=lambda x: [e.value for e in x]))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc),
+                                                 onupdate=lambda: datetime.now(timezone.utc))
+
 
     patient = relationship("Patient", back_populates="user", uselist=False)
     doctor = relationship("Doctor", back_populates="user", uselist=False)

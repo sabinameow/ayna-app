@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime, time, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, Time
+from sqlalchemy import Enum, ForeignKey, Integer, String, Text, Time
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+
+
 from sqlalchemy.dialects.postgresql import UUID, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,8 +31,9 @@ class Appointment(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"))
     doctor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("doctors.id"))
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime)
-    status: Mapped[str] = mapped_column(Enum(AppointmentStatus), default=AppointmentStatus.PENDING)
+    scheduled_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    status: Mapped[str] = mapped_column(Enum(AppointmentStatus, values_callable=lambda x: [e.value for e in x]),
+                                        default=AppointmentStatus.PENDING)
     reason = mapped_column(Text, nullable=True)
     notes = mapped_column(Text, nullable=True)
     selected_symptom_ids = mapped_column(JSON, nullable=True)
