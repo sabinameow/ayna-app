@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     VALIDATE_CERTS: bool= False
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-1.5-flash"
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")

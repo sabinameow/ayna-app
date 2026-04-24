@@ -12,20 +12,16 @@ from backend.app.auth.schemas import (
     PasswordResetRequest,
     RefreshRequest,
     RegisterRequest,
-    ResendVerificationRequest,
     TokenResponse,
     UserOut,
-    VerifyEmailRequest,
 )
 from backend.app.auth.service import (
     authenticate_user,
     create_access_token,
     create_password_reset_token,
     create_refresh_token,
-    create_verification_token,
     decode_password_reset_token,
     decode_token,
-    decode_verification_token,
     get_current_user,
     get_user_by_email,
     hash_password,
@@ -33,7 +29,6 @@ from backend.app.auth.service import (
     verify_password,
 )
 from backend.app.auth.tasks import (
-    send_email_verification_task,
     send_password_reset_task,
     send_password_changed_notification_task,
 )
@@ -56,10 +51,6 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         full_name=body.full_name,
         phone=body.phone,
     )
-
-    token = create_verification_token(user.id)
-    send_email_verification_task.delay(user.email, token)
-
     return user
 
 
@@ -95,45 +86,6 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserOut)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
-
-
-@router.post("/verify-email")
-async def verify_email(body: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
-    user_id = decode_verification_token(body.token)
-
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise NotFoundException("User not found")
-
-    if user.is_verified:
-        return {"message": "Email is already verified"}
-
-    user.is_verified = True
-    await db.flush()
-
-    return {"message": "Email verified successfully"}
-
-
-@router.post("/resend-verification")
-async def resend_verification(
-    body: ResendVerificationRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    user = await get_user_by_email(db, body.email)
-
-    if not user:
-        return {"message": "If this email is registered, a verification link has been sent"}
-
-    if user.is_verified:
-        return {"message": "Email is already verified"}
-
-    token = create_verification_token(user.id)
-    send_email_verification_task.delay(user.email, token)
-
-    return {"message": "If this email is registered, a verification link has been sent"}
-
 
 
 @router.post("/forgot-password")
@@ -181,3 +133,4 @@ async def change_password(
     send_password_changed_notification_task.delay(current_user.email)
 
     return {"message": "Password changed successfully"}
+

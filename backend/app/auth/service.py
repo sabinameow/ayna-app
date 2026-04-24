@@ -164,7 +164,7 @@ async def register_user(
         hashed_password=hash_password(password),
         role=role,
         is_active=True,
-        is_verified=False,
+        is_verified=True,
     )
     db.add(user)
     await db.flush()

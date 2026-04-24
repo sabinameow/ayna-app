@@ -9,6 +9,9 @@ from backend.app.api.appointments import router as appointments_router
 from backend.app.api.doctors import router as doctors_router
 from backend.app.api.chat import router as chat_router
 from backend.app.api.managers import router as managers_router
+from backend.app.api.articles import router as articles_router
+from backend.app.api.notifications import router as notifications_router
+from backend.app.api.subscriptions import router as subscriptions_router
 
 app = FastAPI(
     title="Ayna App",
@@ -31,6 +34,10 @@ app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(doctors_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(managers_router, prefix="/api/v1")
+app.include_router(articles_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(subscriptions_router, prefix="/api/v1")
+
 
 
 @app.get("/")

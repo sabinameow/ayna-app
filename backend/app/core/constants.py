@@ -37,3 +37,11 @@ class SubscriptionStatus(str, enum.Enum):
     ACTIVE = "active"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
+
+
+class CyclePhase(str, enum.Enum):
+    MENSTRUAL = "menstrual"
+    FOLLICULAR = "follicular"
+    OVULATORY = "ovulatory"
+    LUTEAL = "luteal"
+    UNKNOWN = "unknown"
