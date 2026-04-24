@@ -7,7 +7,7 @@ from backend.app.models.subscription import SubscriptionPlan
 PLANS = [
     {
         "name": "Monthly Premium",
-        "price": 4.99,
+        "price": 990,
         "duration_days": 30,
         "features": {
             "ai_phase_insights": True,
@@ -17,7 +17,7 @@ PLANS = [
     },
     {
         "name": "Yearly Premium",
-        "price": 39.99,
+        "price": 11990,
         "duration_days": 365,
         "features": {
             "ai_phase_insights": True,
