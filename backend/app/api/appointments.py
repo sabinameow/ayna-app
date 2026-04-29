@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.database import get_db
+from backend.app.models.doctor import Doctor
 from backend.app.models.user import User
 from backend.app.models.appointment import Appointment
 from backend.app.core.permissions import require_patient
@@ -13,12 +14,23 @@ from backend.app.core.exceptions import NotFoundException, BadRequestException
 from backend.app.schemas.appointment import (
     AppointmentCreate, AppointmentOut, AvailableSlot,
 )
+from backend.app.schemas.doctor import DoctorOut
 from backend.app.services.cycle_service import get_patient_by_user_id
 from backend.app.services.appointment_service import (
     get_available_slots, get_required_tests,
 )
 
 router = APIRouter(tags=["Appointments"])
+
+
+@router.get("/doctors", response_model=list[DoctorOut])
+async def list_available_doctors(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Doctor)
+        .where(Doctor.is_available == True)
+        .order_by(Doctor.full_name.asc())
+    )
+    return list(result.scalars().all())
 
 
 @router.get("/doctors/{doctor_id}/available-slots", response_model=list[AvailableSlot])

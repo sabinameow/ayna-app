@@ -55,7 +55,7 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args={
-            "sslmode": "require",
+            "sslmode": "prefer",
             "sslrootcert": certifi.where(),
         },
     )

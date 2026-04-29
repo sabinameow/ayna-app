@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Ayna",
+    "slug": "ayna-frontend",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FDF5F8"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://127.0.0.1:8000"
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}

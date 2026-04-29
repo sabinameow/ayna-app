@@ -16,7 +16,7 @@ from backend.app.models.medication import Medication, MedicationLog
 from backend.app.models.recommendation import DoctorRecommendation
 from backend.app.core.permissions import require_doctor
 from backend.app.core.exceptions import NotFoundException, ForbiddenException
-from backend.app.schemas.doctor import ScheduleOut, ScheduleUpdate
+from backend.app.schemas.doctor import DoctorOut, ScheduleOut, ScheduleUpdate
 from backend.app.schemas.appointment import AppointmentOut
 from backend.app.schemas.patient import PatientOut
 from backend.app.schemas.cycle import CycleOut
@@ -48,6 +48,14 @@ async def _verify_my_patient(db: AsyncSession, doctor_id, patient_id) -> Patient
     if not patient:
         raise ForbiddenException("This patient is not assigned to you")
     return patient
+
+
+@router.get("/profile", response_model=DoctorOut)
+async def get_profile(
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _get_doctor(db, current_user.id)
 
 
 
@@ -206,6 +214,25 @@ async def add_recommendation(
     db.add(rec)
     await db.flush()
     return rec
+
+
+@router.get(
+    "/patients/{patient_id}/recommendations",
+    response_model=list[RecommendationOut],
+)
+async def get_patient_recommendations(
+    patient_id: uuid.UUID,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    doctor = await _get_doctor(db, current_user.id)
+    await _verify_my_patient(db, doctor.id, patient_id)
+    result = await db.execute(
+        select(DoctorRecommendation)
+        .where(DoctorRecommendation.patient_id == patient_id)
+        .order_by(DoctorRecommendation.created_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 
