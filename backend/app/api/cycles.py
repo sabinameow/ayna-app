@@ -1,3 +1,4 @@
+from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,10 +8,12 @@ from backend.app.core.permissions import require_patient
 from backend.app.core.exceptions import NotFoundException
 from backend.app.schemas.cycle import (
     CycleCreate, CycleOut, CycleDayCreate, CycleDayOut, CyclePrediction,
+    PeriodRangeCreate,
 )
 from backend.app.services.cycle_service import (
     get_patient_by_user_id, create_cycle, get_cycles,
     create_cycle_day, get_cycle_days, predict_next_cycle,
+    delete_cycle_days_range, save_period_range,
 )
 
 router = APIRouter(prefix="/patient", tags=["Cycles"])
@@ -53,6 +56,18 @@ async def get_predictions(
     return prediction
 
 
+@router.post("/period", response_model=list[CycleDayOut], status_code=201)
+async def log_period(
+    body: PeriodRangeCreate,
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db),
+):
+    patient = await get_patient_by_user_id(db, current_user.id)
+    if not patient:
+        raise NotFoundException("Patient profile not found")
+    return await save_period_range(db, patient.id, body.start_date, body.duration)
+
+
 @router.post("/cycle-days", response_model=CycleDayOut, status_code=201)
 async def add_cycle_day(
     body: CycleDayCreate,
@@ -63,6 +78,19 @@ async def add_cycle_day(
     if not patient:
         raise NotFoundException("Patient profile not found")
     return await create_cycle_day(db, patient.id, body)
+
+
+@router.delete("/cycle-days", status_code=204)
+async def delete_cycle_days(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db),
+):
+    patient = await get_patient_by_user_id(db, current_user.id)
+    if not patient:
+        raise NotFoundException("Patient profile not found")
+    await delete_cycle_days_range(db, patient.id, start_date, end_date)
 
 
 @router.get("/cycle-days", response_model=list[CycleDayOut])

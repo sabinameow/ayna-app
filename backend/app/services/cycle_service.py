@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.cycle import MenstrualCycle, CycleDay
@@ -39,6 +39,13 @@ async def get_cycles(db: AsyncSession, patient_id) -> list[MenstrualCycle]:
 
 
 async def create_cycle_day(db: AsyncSession, patient_id, data) -> CycleDay:
+    # Upsert: remove existing entry for this date before inserting
+    await db.execute(
+        delete(CycleDay).where(
+            CycleDay.patient_id == patient_id,
+            CycleDay.date == data.date,
+        )
+    )
     cycle_day = CycleDay(
         patient_id=patient_id,
         date=data.date,
@@ -49,6 +56,54 @@ async def create_cycle_day(db: AsyncSession, patient_id, data) -> CycleDay:
     db.add(cycle_day)
     await db.flush()
     return cycle_day
+
+
+async def save_period_range(
+    db: AsyncSession, patient_id, start_date: date, duration: int
+) -> list[CycleDay]:
+    from datetime import timedelta
+
+    def flow_for_day(i: int) -> str:
+        if i <= 1:
+            return "heavy"
+        if i >= duration - 2:
+            return "light"
+        return "medium"
+
+    # Delete existing days in range first (upsert semantics)
+    end_date = start_date + timedelta(days=duration - 1)
+    await db.execute(
+        delete(CycleDay).where(
+            CycleDay.patient_id == patient_id,
+            CycleDay.date >= start_date,
+            CycleDay.date <= end_date,
+        )
+    )
+
+    days = []
+    for i in range(duration):
+        day = CycleDay(
+            patient_id=patient_id,
+            date=start_date + timedelta(days=i),
+            flow_intensity=flow_for_day(i),
+        )
+        db.add(day)
+        days.append(day)
+
+    await db.flush()
+    return days
+
+
+async def delete_cycle_days_range(
+    db: AsyncSession, patient_id, start_date: date, end_date: date
+) -> None:
+    await db.execute(
+        delete(CycleDay).where(
+            CycleDay.patient_id == patient_id,
+            CycleDay.date >= start_date,
+            CycleDay.date <= end_date,
+        )
+    )
 
 
 async def get_cycle_days(db: AsyncSession, patient_id, month: int, year: int) -> list[CycleDay]:

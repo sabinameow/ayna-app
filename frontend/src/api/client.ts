@@ -146,6 +146,17 @@ export const api = {
       { token }
     );
   },
+  logPeriod: (token: string, startDate: string, duration: number) =>
+    request<CycleDay[]>("/api/v1/patient/period", {
+      method: "POST",
+      token,
+      body: { start_date: startDate, duration },
+    }),
+  deleteCycleDaysRange: (token: string, startDate: string, endDate: string) =>
+    request<void>(`/api/v1/patient/cycle-days?start_date=${startDate}&end_date=${endDate}`, {
+      method: "DELETE",
+      token,
+    }),
   listSymptomsCatalog: (token: string) =>
     request<Symptom[]>("/api/v1/symptoms/symptoms", { token }),
   listPatientSymptoms: (token: string) =>

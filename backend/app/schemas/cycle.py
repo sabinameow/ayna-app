@@ -35,6 +35,11 @@ class CyclePrediction(BaseModel):
     average_cycle_length: int
 
 
+class PeriodRangeCreate(BaseModel):
+    start_date: date
+    duration: int = Field(default=5, ge=1, le=10)
+
+
 class CycleDayCreate(BaseModel):
     date: date
     flow_intensity: FlowIntensity = FlowIntensity.NONE
