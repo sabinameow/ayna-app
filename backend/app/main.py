@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,6 +14,10 @@ from backend.app.api.managers import router as managers_router
 from backend.app.api.articles import router as articles_router
 from backend.app.api.notifications import router as notifications_router
 from backend.app.api.subscriptions import router as subscriptions_router
+from backend.app.config import settings
+from backend.app.database import verify_neon_connection
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Ayna App",
@@ -38,6 +44,11 @@ app.include_router(articles_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(subscriptions_router, prefix="/api/v1")
 
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    await verify_neon_connection()
+    logger.info("Connected to Neon DB: %s", settings.sanitized_database_target)
 
 
 @app.get("/")

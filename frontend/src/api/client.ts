@@ -65,10 +65,11 @@ function formatErrorDetail(detail: unknown) {
 
 async function request<T>(path: string, options: RequestOptions = {}) {
   const { method = "GET", body, token } = options;
+  const endpoint = `${API_BASE_URL}${path}`;
   let response: Response;
 
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(endpoint, {
       method,
       headers: {
         "Content-Type": "application/json",
@@ -77,10 +78,14 @@ async function request<T>(path: string, options: RequestOptions = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {
-    const message =
-      error instanceof Error && error.message
-        ? error.message
-        : `Could not reach the API at ${API_BASE_URL}`;
+    const rawMessage = error instanceof Error ? error.message.trim() : "";
+    const isConnectivityError =
+      !rawMessage ||
+      /network request failed|request failed|load failed|failed to fetch/i.test(rawMessage);
+
+    const message = isConnectivityError
+      ? `Could not reach the API at ${API_BASE_URL}. Make sure the backend is running and your phone can open ${API_BASE_URL}/health on the same Wi-Fi.`
+      : `${rawMessage} (${endpoint})`;
     throw new ApiError(0, message);
   }
 
@@ -90,7 +95,10 @@ async function request<T>(path: string, options: RequestOptions = {}) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = formatErrorDetail(data?.detail) || data?.message || "Request failed";
+    const detail =
+      formatErrorDetail(data?.detail) ||
+      data?.message ||
+      `Request failed with status ${response.status}`;
     throw new ApiError(response.status, detail);
   }
 
@@ -237,6 +245,22 @@ export const api = {
     request<NotificationItem[]>("/api/v1/notifications", { token }),
   unreadNotifications: (token: string) =>
     request<UnreadCount>("/api/v1/notifications/unread-count", { token }),
+  markNotificationRead: (token: string, notificationId: string) =>
+    request<NotificationItem>(`/api/v1/notifications/${notificationId}/read`, {
+      method: "PUT",
+      token,
+    }),
+  markAllNotificationsRead: (token: string) =>
+    request<{ updated: number }>("/api/v1/notifications/read-all", {
+      method: "PUT",
+      token,
+    }),
+  updateDeviceToken: (token: string, deviceToken: string | null) =>
+    request<{ device_token: string | null }>("/api/v1/notifications/device-token", {
+      method: "PUT",
+      token,
+      body: { device_token: deviceToken },
+    }),
   patientSessions: (token: string) =>
     request<ChatSession[]>("/api/v1/patient/chat/sessions", { token }),
   patientMessages: (token: string, sessionId: string) =>

@@ -15,6 +15,10 @@ from backend.app.services.cycle_service import (
     create_cycle_day, get_cycle_days, predict_next_cycle,
     delete_cycle_days_range, save_period_range,
 )
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+)
 
 router = APIRouter(prefix="/patient", tags=["Cycles"])
 
@@ -28,7 +32,21 @@ async def add_cycle(
     patient = await get_patient_by_user_id(db, current_user.id)
     if not patient:
         raise NotFoundException("Patient profile not found")
-    return await create_cycle(db, patient.id, body)
+    period_length = body.period_length
+    if period_length is None and body.end_date:
+        period_length = (body.end_date - body.start_date).days + 1
+    cycle = await create_cycle(db, patient.id, body.start_date, period_length or 5)
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        role="patient",
+        type="cycle.saved",
+        title="Saved successfully",
+        message=f"Cycle data for {body.start_date.isoformat()} was saved.",
+        metadata={"cycle_id": str(cycle.id), "patient_id": str(patient.id)},
+        dedupe_key=build_notification_dedupe_key("cycle.saved", patient.id, body.start_date),
+    )
+    return cycle
 
 
 @router.get("/cycles", response_model=list[CycleOut])
@@ -77,7 +95,18 @@ async def add_cycle_day(
     patient = await get_patient_by_user_id(db, current_user.id)
     if not patient:
         raise NotFoundException("Patient profile not found")
-    return await create_cycle_day(db, patient.id, body)
+    cycle_day = await create_cycle_day(db, patient.id, body)
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        role="patient",
+        type="cycle.day.saved",
+        title="Saved successfully",
+        message=f"Cycle data for {body.date.isoformat()} was saved.",
+        metadata={"cycle_day_id": str(cycle_day.id), "patient_id": str(patient.id)},
+        dedupe_key=build_notification_dedupe_key("cycle.day.saved", patient.id, body.date),
+    )
+    return cycle_day
 
 
 @router.delete("/cycle-days", status_code=204)

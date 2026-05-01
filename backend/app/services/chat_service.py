@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.chat import ChatSession, ChatMessage
 from backend.app.models.manager import Manager
+from backend.app.models.patient import Patient
+from backend.app.models.user import User
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+)
 
 
 class ConnectionManager:
@@ -75,6 +81,17 @@ async def get_or_create_session(
     )
     db.add(session)
     await db.flush()
+    await create_notification(
+        db,
+        user_id=mgr.user_id,
+        role="manager",
+        type="chat.new_request",
+        title="New patient request",
+        message="A patient started a new support chat.",
+        metadata={"session_id": str(session.id), "patient_id": str(patient_id)},
+        dedupe_key=build_notification_dedupe_key("chat.session.created", session.id, mgr.user_id),
+        send_push=True,
+    )
     return session
 
 
@@ -91,6 +108,48 @@ async def save_message(
     )
     db.add(msg)
     await db.flush()
+
+    session_result = await db.execute(
+        select(ChatSession).where(ChatSession.id == session_id)
+    )
+    sender_result = await db.execute(select(User).where(User.id == sender_id))
+    session = session_result.scalar_one_or_none()
+    sender = sender_result.scalar_one_or_none()
+
+    if session and sender:
+        patient_result = await db.execute(
+            select(Patient).where(Patient.id == session.patient_id)
+        )
+        manager_result = await db.execute(
+            select(Manager).where(Manager.id == session.manager_id)
+        )
+        patient = patient_result.scalar_one_or_none()
+        manager_profile = manager_result.scalar_one_or_none()
+
+        if sender.role == "patient" and manager_profile:
+            await create_notification(
+                db,
+                user_id=manager_profile.user_id,
+                role="manager",
+                type="chat.message.patient",
+                title="New message from patient",
+                message=content[:180],
+                metadata={"session_id": str(session.id), "message_id": str(msg.id)},
+                dedupe_key=build_notification_dedupe_key("chat.message", msg.id, manager_profile.user_id),
+                send_push=True,
+            )
+        elif sender.role == "manager" and patient:
+            await create_notification(
+                db,
+                user_id=patient.user_id,
+                role="patient",
+                type="chat.message.manager",
+                title="New message from manager",
+                message=content[:180],
+                metadata={"session_id": str(session.id), "message_id": str(msg.id)},
+                dedupe_key=build_notification_dedupe_key("chat.message", msg.id, patient.user_id),
+                send_push=True,
+            )
     return msg
 
 

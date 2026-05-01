@@ -8,8 +8,16 @@ function inferHost() {
   const scriptURL =
     NativeModules.SourceCode?.scriptURL ?? NativeModules.PlatformConstants?.scriptURL ?? "";
 
-  const match = scriptURL.match(/^https?:\/\/([^/:]+)(?::\d+)?/);
-  return match?.[1];
+  if (!scriptURL) {
+    return undefined;
+  }
+
+  try {
+    return new URL(scriptURL).hostname || undefined;
+  } catch {
+    const match = scriptURL.match(/^[a-z]+:\/\/([^/:]+)(?::\d+)?/i);
+    return match?.[1];
+  }
 }
 
 function getDefaultApiBaseUrl() {

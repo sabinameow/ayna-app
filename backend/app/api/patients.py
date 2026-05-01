@@ -21,6 +21,10 @@ from backend.app.schemas.medication import MedicationOut, MedicationLogCreate, M
 from backend.app.schemas.recommendation import RecommendationOut
 from backend.app.schemas.patient import PatientOut, PatientProfileUpdate
 from backend.app.services.cycle_service import get_patient_by_user_id
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+)
 
 
 router = APIRouter(prefix="/patient", tags=["Patient"])
@@ -75,6 +79,16 @@ async def add_mood(
     )
     db.add(entry)
     await db.flush()
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        role="patient",
+        type="mood.saved",
+        title="Saved successfully",
+        message=f"Your mood entry for {body.date.isoformat()} was saved.",
+        metadata={"mood_id": str(entry.id), "patient_id": str(patient.id)},
+        dedupe_key=build_notification_dedupe_key("mood.saved", patient.id, body.date),
+    )
     return entry
 
 
@@ -190,6 +204,16 @@ async def log_medication(
     )
     db.add(log)
     await db.flush()
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        role="patient",
+        type="medication.logged",
+        title="Saved successfully",
+        message="Medication log saved.",
+        metadata={"medication_log_id": str(log.id), "medication_id": str(medication_id)},
+        dedupe_key=build_notification_dedupe_key("medication.logged", log.id),
+    )
     return log
 
 

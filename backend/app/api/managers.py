@@ -16,7 +16,11 @@ from backend.app.schemas.appointment import AppointmentOut, AppointmentUpdate, A
 from backend.app.schemas.doctor import ScheduleOut
 from backend.app.schemas.manager import ManagerOut
 from backend.app.services.chat_service import close_session, get_session_messages
-from backend.app.services.appointment_service import get_available_slots
+from backend.app.services.appointment_service import (
+    get_available_slots,
+    notify_appointment_cancelled,
+    notify_appointment_updated,
+)
 
 router = APIRouter(prefix="/manager", tags=["Manager"])
 
@@ -116,10 +120,18 @@ async def update_appointment(
     if not appointment:
         raise NotFoundException("Appointment not found")
 
+    previous_status = appointment.status
+    previous_scheduled_at = appointment.scheduled_at
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(appointment, field, value)
 
     await db.flush()
+    await notify_appointment_updated(
+        db,
+        appointment,
+        previous_status=previous_status,
+        previous_scheduled_at=previous_scheduled_at,
+    )
     return appointment
 
 
@@ -135,6 +147,8 @@ async def cancel_appointment(
     appointment = result.scalar_one_or_none()
     if not appointment:
         raise NotFoundException("Appointment not found")
+    appointment.status = "cancelled"
+    await notify_appointment_cancelled(db, appointment, actor_role="manager")
     await db.delete(appointment)
     await db.flush()
     return None

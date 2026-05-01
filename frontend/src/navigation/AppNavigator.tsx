@@ -17,6 +17,7 @@ import { ManagerChatsScreen } from "@/screens/manager/ManagerChatsScreen";
 import { ManagerDashboardScreen } from "@/screens/manager/ManagerDashboardScreen";
 import { ManagerProfileScreen } from "@/screens/manager/ManagerProfileScreen";
 import { ManagerSchedulesScreen } from "@/screens/manager/ManagerSchedulesScreen";
+import { NotificationsScreen } from "@/screens/NotificationsScreen";
 import { PatientAppointmentsScreen } from "@/screens/patient/PatientAppointmentsScreen";
 import { PatientChatScreen } from "@/screens/patient/PatientChatScreen";
 import { PatientCycleScreen } from "@/screens/patient/PatientCycleScreen";
@@ -135,11 +136,20 @@ export function AppNavigator() {
           <Stack.Screen name="Register" component={RegisterScreen} />
         </>
       ) : user.role === "patient" ? (
-        <Stack.Screen name="PatientTabs" component={PatientTabs} />
+        <>
+          <Stack.Screen name="PatientTabs" component={PatientTabs} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        </>
       ) : user.role === "doctor" ? (
-        <Stack.Screen name="DoctorTabs" component={DoctorTabs} />
+        <>
+          <Stack.Screen name="DoctorTabs" component={DoctorTabs} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        </>
       ) : (
-        <Stack.Screen name="ManagerTabs" component={ManagerTabs} />
+        <>
+          <Stack.Screen name="ManagerTabs" component={ManagerTabs} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        </>
       )}
     </Stack.Navigator>
   );

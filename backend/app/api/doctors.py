@@ -24,6 +24,11 @@ from backend.app.schemas.symptom import PatientSymptomOut
 from backend.app.schemas.mood import MoodOut
 from backend.app.schemas.medication import MedicationCreate, MedicationOut, MedicationUpdate
 from backend.app.schemas.recommendation import RecommendationCreate, RecommendationOut
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+    get_patient_user_id,
+)
 
 
 router = APIRouter(prefix="/doctor", tags=["Doctor"])
@@ -168,6 +173,18 @@ async def prescribe_medication(
     )
     db.add(med)
     await db.flush()
+    patient_user_id = await get_patient_user_id(db, patient_id)
+    if patient_user_id:
+        await create_notification(
+            db,
+            user_id=patient_user_id,
+            role="patient",
+            type="medication.prescribed",
+            title="New medication added",
+            message=f"Dr. {doctor.full_name} added {body.name} to your care plan.",
+            metadata={"medication_id": str(med.id), "patient_id": str(patient_id)},
+            dedupe_key=build_notification_dedupe_key("medication.prescribed", med.id),
+        )
     return med
 
 
@@ -213,6 +230,19 @@ async def add_recommendation(
     )
     db.add(rec)
     await db.flush()
+    patient_user_id = await get_patient_user_id(db, patient_id)
+    if patient_user_id:
+        await create_notification(
+            db,
+            user_id=patient_user_id,
+            role="patient",
+            type="message.doctor",
+            title="New message from your doctor",
+            message=body.content[:180],
+            metadata={"recommendation_id": str(rec.id), "patient_id": str(patient_id)},
+            dedupe_key=build_notification_dedupe_key("doctor.recommendation", rec.id),
+            send_push=True,
+        )
     return rec
 
 

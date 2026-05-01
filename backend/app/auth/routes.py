@@ -37,6 +37,10 @@ from backend.app.core.exceptions import (
     CredentialsException,
     NotFoundException,
 )
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -50,6 +54,16 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role="patient",
         full_name=body.full_name,
         phone=body.phone,
+    )
+    await create_notification(
+        db,
+        user_id=user.id,
+        role="patient",
+        type="auth.registered",
+        title="Welcome to Ayna",
+        message="Your account is ready. Start logging your cycle, symptoms, and mood.",
+        metadata={"user_id": str(user.id)},
+        dedupe_key=build_notification_dedupe_key("auth.registered", user.id),
     )
     return user
 
@@ -133,4 +147,3 @@ async def change_password(
     send_password_changed_notification_task.delay(current_user.email)
 
     return {"message": "Password changed successfully"}
-

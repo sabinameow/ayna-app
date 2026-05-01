@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import type {
@@ -77,6 +78,7 @@ export function PatientHomeScreen() {
           <Text style={styles.nameText}>{profile?.full_name ?? "Patient"}</Text>
           <Text style={styles.subText}>How is it going today ?</Text>
         </View>
+        <NotificationBell />
       </View>
 
       {/* Search bar */}

@@ -5,6 +5,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import type { Appointment, DoctorProfile, PatientProfile } from "@/types/api";
@@ -97,21 +98,24 @@ export function DoctorDashboardScreen() {
           </Text>
           <Text style={styles.dateText}>{currentDate}</Text>
         </View>
-        <View
-          style={[
-            styles.availBadge,
-            { borderColor: profile?.is_available ? "#B2DFC7" : "#F5C0C0" },
-          ]}
-        >
+        <View style={styles.headerActions}>
+          <NotificationBell color="#3F6CF6" backgroundColor="#EAF0FF" />
           <View
             style={[
-              styles.dot,
-              { backgroundColor: profile?.is_available ? "#38A169" : "#E25555" },
+              styles.availBadge,
+              { borderColor: profile?.is_available ? "#B2DFC7" : "#F5C0C0" },
             ]}
-          />
-          <Text style={styles.availText}>
-            {profile?.is_available ? "Available" : "Unavailable"}
-          </Text>
+          >
+            <View
+              style={[
+                styles.dot,
+                { backgroundColor: profile?.is_available ? "#38A169" : "#E25555" },
+              ]}
+            />
+            <Text style={styles.availText}>
+              {profile?.is_available ? "Available" : "Unavailable"}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -243,6 +247,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
     marginBottom: 20,
+  },
+  headerActions: {
+    alignItems: "flex-end",
+    gap: 10,
   },
   greeting: { fontSize: 13, color: "#7F7486", marginBottom: 2 },
   doctorName: { fontSize: 22, fontWeight: "800", color: "#231F29" },

@@ -6,9 +6,12 @@ import { api } from "@/api/client";
 import { AppInput } from "@/components/AppInput";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
+import { NotificationBell } from "@/components/NotificationBell";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import { useNotifications } from "@/hooks/useNotifications";
 import type { Appointment, AvailableSlot, DoctorProfile, Symptom } from "@/types/api";
 import { formatDate, formatTime } from "@/utils/format";
 
@@ -30,6 +33,8 @@ function buildWeekStrip(base: Date) {
 
 export function PatientAppointmentsScreen() {
   const { accessToken } = useAuth();
+  const { showToast } = useToast();
+  const { refreshUnread } = useNotifications();
   const [doctors, setDoctors] = useState<DoctorProfile[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [symptoms, setSymptoms] = useState<Symptom[]>([]);
@@ -79,16 +84,22 @@ export function PatientAppointmentsScreen() {
 
   async function book() {
     if (!accessToken || !selectedDoctor || !selectedSlot) return;
-    await api.createAppointment(accessToken, {
-      doctor_id: selectedDoctor.id,
-      scheduled_at: `${selectedDate}T${selectedSlot}:00`,
-      reason: reason || undefined,
-      selected_symptom_ids: selectedSymptoms.length ? selectedSymptoms : undefined,
-    });
-    setShowSuccess(true);
-    setReason("");
-    setSelectedSymptoms([]);
-    await load();
+    try {
+      await api.createAppointment(accessToken, {
+        doctor_id: selectedDoctor.id,
+        scheduled_at: `${selectedDate}T${selectedSlot}:00`,
+        reason: reason || undefined,
+        selected_symptom_ids: selectedSymptoms.length ? selectedSymptoms : undefined,
+      });
+      setShowSuccess(true);
+      setReason("");
+      setSelectedSymptoms([]);
+      showToast("Saved successfully", "success");
+      await Promise.all([load(), refreshUnread()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to book appointment");
+      showToast("Something went wrong", "error");
+    }
   }
 
   function backToHome() {
@@ -100,8 +111,14 @@ export function PatientAppointmentsScreen() {
 
   async function cancelAppointment(id: string) {
     if (!accessToken) return;
-    await api.cancelAppointment(accessToken, id).catch(() => undefined);
-    await load();
+    try {
+      await api.cancelAppointment(accessToken, id);
+      showToast("Deleted", "success");
+      await Promise.all([load(), refreshUnread()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel appointment");
+      showToast("Something went wrong", "error");
+    }
   }
 
   const symptomSet = useMemo(() => new Set(selectedSymptoms), [selectedSymptoms]);
@@ -113,9 +130,12 @@ export function PatientAppointmentsScreen() {
       <AppScreen>
         <View style={styles.headerRow}>
           <Text style={styles.title}>Appointments</Text>
-          <Pressable style={styles.bellPill} onPress={() => setStep("doctors")}>
-            <Feather name="plus" size={18} color="#E53F8F" />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <NotificationBell />
+            <Pressable style={styles.bellPill} onPress={() => setStep("doctors")}>
+              <Feather name="plus" size={18} color="#E53F8F" />
+            </Pressable>
+          </View>
         </View>
 
         <Pressable onPress={() => setStep("doctors")}>
@@ -379,6 +399,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   title: { fontSize: 22, fontWeight: "800", color: "#231F29" },
   backBtn: {

@@ -7,7 +7,12 @@ from backend.app.auth.service import get_current_user
 from backend.app.core.exceptions import NotFoundException
 from backend.app.database import get_db
 from backend.app.models.user import User
-from backend.app.schemas.notification import NotificationOut, UnreadCountOut
+from backend.app.schemas.notification import (
+    DeviceTokenUpdate,
+    MarkAllAsReadOut,
+    NotificationOut,
+    UnreadCountOut,
+)
 from backend.app.services.notification_service import (
     count_unread,
     list_notifications,
@@ -51,10 +56,21 @@ async def mark_read(
     return notif
 
 
-@router.put("/read-all")
+@router.put("/read-all", response_model=MarkAllAsReadOut)
 async def mark_all_read(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     updated = await mark_all_as_read(db, current_user.id)
     return {"updated": updated}
+
+
+@router.put("/device-token", response_model=dict[str, str | None])
+async def update_device_token(
+    body: DeviceTokenUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    current_user.device_token = body.device_token
+    await db.flush()
+    return {"device_token": current_user.device_token}

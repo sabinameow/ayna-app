@@ -4,7 +4,11 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from backend.app.core.constants import FlowIntensity
+from backend.app.core.constants import (
+    DEFAULT_PERIOD_LENGTH,
+    FlowIntensity,
+    MAX_PERIOD_LENGTH,
+)
 
 
 class CycleCreate(BaseModel):
@@ -39,7 +43,7 @@ class CyclePrediction(BaseModel):
 
 class PeriodRangeCreate(BaseModel):
     start_date: date
-    duration: int = Field(default=5, ge=1, le=10)
+    duration: int = Field(default=DEFAULT_PERIOD_LENGTH, ge=1, le=MAX_PERIOD_LENGTH)
 
 
 class CycleDayCreate(BaseModel):

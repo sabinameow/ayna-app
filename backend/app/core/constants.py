@@ -45,3 +45,9 @@ class CyclePhase(str, enum.Enum):
     OVULATORY = "ovulatory"
     LUTEAL = "luteal"
     UNKNOWN = "unknown"
+
+
+MIN_CYCLE_GAP_DAYS = 18
+DEFAULT_PERIOD_LENGTH = 5
+MAX_PERIOD_LENGTH = 10
+DEFAULT_CYCLE_LENGTH = 28

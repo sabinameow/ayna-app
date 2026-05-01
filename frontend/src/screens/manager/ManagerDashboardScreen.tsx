@@ -5,6 +5,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import type { Appointment, ChatSession, DoctorProfile, ManagerProfile, Schedule } from "@/types/api";
@@ -70,11 +71,14 @@ export function ManagerDashboardScreen() {
           <Text style={styles.managerName}>{profile?.full_name ?? "Manager"}</Text>
           <Text style={styles.dateText}>{currentDate}</Text>
         </View>
-        <View style={styles.queueBadge}>
-          <Text style={[styles.queueCount, openSessions.length > 0 && styles.queueCountActive]}>
-            {openSessions.length}
-          </Text>
-          <Text style={styles.queueLabel}>in queue</Text>
+        <View style={styles.headerActions}>
+          <NotificationBell color="#557417" backgroundColor="#EEF7D8" />
+          <View style={styles.queueBadge}>
+            <Text style={[styles.queueCount, openSessions.length > 0 && styles.queueCountActive]}>
+              {openSessions.length}
+            </Text>
+            <Text style={styles.queueLabel}>in queue</Text>
+          </View>
         </View>
       </View>
 
@@ -220,6 +224,7 @@ export function ManagerDashboardScreen() {
 
 const styles = StyleSheet.create({
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 },
+  headerActions: { alignItems: "flex-end", gap: 10 },
   greeting: { fontSize: 13, color: "#7F7486", marginBottom: 2 },
   managerName: { fontSize: 22, fontWeight: "800", color: "#231F29" },
   dateText: { fontSize: 12, color: "#7F7486", marginTop: 4 },

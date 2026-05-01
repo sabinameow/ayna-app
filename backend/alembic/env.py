@@ -1,7 +1,8 @@
 from logging.config import fileConfig
-from urllib.parse import urlparse, urlunparse
-from sqlalchemy import engine_from_config, pool
+
+import certifi
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 from backend.app.config import settings
 from backend.app.database import Base
@@ -24,10 +25,8 @@ from backend.app.models.test_requirement import SymptomTestMapping
 
 config = context.config
 
-db_url = settings.DATABASE_URL
+db_url = settings.database_url_with_neon_ssl
 db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-parsed = urlparse(db_url)
-db_url = urlunparse(parsed._replace(query=""))
 config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
@@ -49,13 +48,12 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    import certifi
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args={
-            "sslmode": "prefer",
+            "sslmode": "require",
             "sslrootcert": certifi.where(),
         },
     )

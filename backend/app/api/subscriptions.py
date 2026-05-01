@@ -12,7 +12,10 @@ from backend.app.schemas.subscription import (
     SubscriptionPlanOut,
 )
 from backend.app.services.cycle_service import get_patient_by_user_id
-from backend.app.services.notification_service import create_notification
+from backend.app.services.notification_service import (
+    build_notification_dedupe_key,
+    create_notification,
+)
 from backend.app.services.subscription_service import (
     cancel_subscription,
     get_active_subscription,
@@ -78,12 +81,16 @@ async def subscribe(
     await create_notification(
         db,
         user_id=current_user.id,
+        role="patient",
+        type="subscription.activated",
         title="Subscription activated",
-        body=(
+        message=(
             f"You are now subscribed to the '{plan.name}' plan "
             f"until {sub.expires_at:%Y-%m-%d}. AI phase insights "
             "and chat with a manager are now available."
         ),
+        metadata={"subscription_id": str(sub.id), "plan_id": str(plan.id)},
+        dedupe_key=build_notification_dedupe_key("subscription.activated", sub.id),
     )
     return sub
 
@@ -105,11 +112,15 @@ async def cancel_current_subscription(
     await create_notification(
         db,
         user_id=current_user.id,
+        role="patient",
+        type="subscription.cancelled",
         title="Subscription cancelled",
-        body=(
+        message=(
             "Your subscription has been cancelled. Premium features "
             "(AI insights, manager chat) remain active until the end "
             "of the paid period."
         ),
+        metadata={"subscription_id": str(cancelled.id)},
+        dedupe_key=build_notification_dedupe_key("subscription.cancelled", cancelled.id),
     )
     return cancelled

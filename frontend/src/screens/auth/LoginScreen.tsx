@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
+import { API_BASE_URL } from "@/constants/config";
 import { AppInput } from "@/components/AppInput";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
@@ -60,6 +61,7 @@ export function LoginScreen({ navigation }: Props) {
         <Text style={styles.subtitle}>
           Sign in to access your patient, doctor, or manager workspace.
         </Text>
+        <Text style={styles.apiHint}>API: {API_BASE_URL}</Text>
         <AppInput
           label="Email"
           value={email}
@@ -102,6 +104,7 @@ const styles = StyleSheet.create({
   tagline: { color: "#9A8E9D", letterSpacing: 1.2 },
   title: { fontSize: 28, fontWeight: "800", color: "#231F29", marginBottom: 6 },
   subtitle: { color: "#7F7486", marginBottom: 18 },
+  apiHint: { color: "#9A8E9D", fontSize: 12, marginBottom: 14 },
   error: { color: "#E25555", marginTop: -4 },
   link: { textAlign: "center", color: "#E53F8F", fontWeight: "700" },
   hintBox: { backgroundColor: "#FFFFFFAA", borderRadius: 18, padding: 16, gap: 4 },

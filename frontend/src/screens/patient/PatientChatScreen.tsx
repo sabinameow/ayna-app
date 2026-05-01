@@ -13,6 +13,7 @@ import {
 
 import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useAuth } from "@/context/AuthContext";
 import { useChatSocket } from "@/hooks/useChatSocket";
 import { useFocusReload } from "@/hooks/useFocusReload";
@@ -150,7 +151,10 @@ export function PatientChatScreen() {
               {activeSession ? `Status: ${activeSession.status}` : "Send a message to start"}
             </Text>
           </View>
-          <ConnectionPill status={status} />
+          <View style={styles.headerActions}>
+            <NotificationBell />
+            <ConnectionPill status={status} />
+          </View>
         </View>
 
         <ScrollView
@@ -258,6 +262,7 @@ function pillFor(status: ConnectionStatus): { color: string; label: string } {
 const styles = StyleSheet.create({
   flexFill: { flex: 1, gap: 12, paddingBottom: 20 },
   headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   titleBox: {},
   title: { fontSize: 22, fontWeight: "800", color: "#231F29" },
   subtitle: { fontSize: 12, color: "#7F7486", marginTop: 2 },

@@ -1,6 +1,7 @@
 import os
 import ssl
 import certifi
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,6 +34,25 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     )
+
+    @property
+    def database_url_with_neon_ssl(self) -> str:
+        parsed = urlparse(self.DATABASE_URL)
+        query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query_params["sslmode"] = "require"
+        return urlunparse(parsed._replace(query=urlencode(query_params)))
+
+    @property
+    def async_database_url(self) -> str:
+        parsed = urlparse(self.database_url_with_neon_ssl)
+        query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query_params.pop("sslmode", None)
+        return urlunparse(parsed._replace(query=urlencode(query_params)))
+
+    @property
+    def sanitized_database_target(self) -> str:
+        parsed = urlparse(self.database_url_with_neon_ssl)
+        return f"host={parsed.hostname}, db={parsed.path.lstrip('/')}"
 
 
 settings = Settings()

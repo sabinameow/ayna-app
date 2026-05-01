@@ -14,6 +14,7 @@ export type User = {
   id: string;
   email?: string | null;
   phone?: string | null;
+  device_token?: string | null;
   role: UserRole;
   is_active: boolean;
   is_verified: boolean;
@@ -159,10 +160,13 @@ export type Appointment = {
 export type NotificationItem = {
   id: string;
   user_id: string;
+  role: UserRole | "admin";
+  type: string;
   title: string;
-  body: string;
+  message: string;
   is_read: boolean;
   created_at: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type UnreadCount = {

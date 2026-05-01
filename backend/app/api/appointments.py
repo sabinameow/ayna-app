@@ -17,7 +17,10 @@ from backend.app.schemas.appointment import (
 from backend.app.schemas.doctor import DoctorOut
 from backend.app.services.cycle_service import get_patient_by_user_id
 from backend.app.services.appointment_service import (
-    get_available_slots, get_required_tests,
+    get_available_slots,
+    get_required_tests,
+    notify_appointment_cancelled,
+    notify_appointment_created,
 )
 
 router = APIRouter(tags=["Appointments"])
@@ -70,6 +73,7 @@ async def book_appointment(
     )
     db.add(appointment)
     await db.flush()
+    await notify_appointment_created(db, appointment)
     return appointment
 
 
@@ -115,3 +119,4 @@ async def cancel_appointment(
 
     appointment.status = "cancelled"
     await db.flush()
+    await notify_appointment_cancelled(db, appointment, actor_role="patient")
