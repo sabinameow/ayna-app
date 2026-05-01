@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { api } from "@/api/client";
@@ -8,12 +8,16 @@ import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
-import type { CycleDay, CyclePrediction, MoodStats, Symptom } from "@/types/api";
+import type { Cycle, CycleDay, MoodStats, Symptom } from "@/types/api";
 
 const PERIOD_COLOR = "#E53F8F";
 const PERIOD_LIGHT = "#F8B6CF";
 const PERIOD_DARK = "#A11D5C";
 const PERIOD_BG = "#FCE4EF";
+
+const PERIOD_LENGTH = 5;
+const DEFAULT_CYCLE_LENGTH = 28;
+const PREDICTION_HORIZON = 6;
 
 const moods = ["great", "good", "okay", "bad", "terrible"] as const;
 const flowOptions: { key: "none" | "light" | "medium" | "heavy"; color: string }[] = [
@@ -48,43 +52,22 @@ function addDays(dateStr: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function flowForDay(i: number, total: number): "light" | "medium" | "heavy" {
-  if (i <= 1) return "heavy";
-  if (i >= total - 2) return "light";
-  return "medium";
-}
-
-function findPeriodRange(
-  date: string,
-  flowByDate: Map<string, string>
-): { start: string; end: string; length: number } {
-  let start = date;
-  let end = date;
-  let check = addDays(start, -1);
-  while (flowByDate.has(check) && flowByDate.get(check) !== "none") {
-    start = check;
-    check = addDays(start, -1);
-  }
-  check = addDays(end, 1);
-  while (flowByDate.has(check) && flowByDate.get(check) !== "none") {
-    end = check;
-    check = addDays(end, 1);
-  }
-  const startD = new Date(start + "T12:00:00");
-  const endD = new Date(end + "T12:00:00");
-  const length = Math.round((endD.getTime() - startD.getTime()) / 86400000) + 1;
-  return { start, end, length };
+function diffDays(a: string, b: string): number {
+  return Math.round(
+    (new Date(b + "T12:00:00").getTime() - new Date(a + "T12:00:00").getTime()) / 86400000
+  );
 }
 
 function formatDate(dateStr: string, opts?: Intl.DateTimeFormatOptions) {
-  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", opts ?? { month: "short", day: "numeric" });
+  return new Date(dateStr + "T12:00:00").toLocaleDateString(
+    "en-US",
+    opts ?? { month: "short", day: "numeric" }
+  );
 }
-
-type SheetMode = "log" | "edit";
 
 export function PatientCycleScreen() {
   const { accessToken } = useAuth();
-  const [prediction, setPrediction] = useState<CyclePrediction | null>(null);
+  const [cycles, setCycles] = useState<Cycle[]>([]);
   const [cycleDays, setCycleDays] = useState<CycleDay[]>([]);
   const [catalog, setCatalog] = useState<Symptom[]>([]);
   const [moodStats, setMoodStats] = useState<MoodStats | null>(null);
@@ -102,37 +85,40 @@ export function PatientCycleScreen() {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() };
   });
-
-  // Bottom sheet state
-  const [sheet, setSheet] = useState<{
+  const [confirmDelete, setConfirmDelete] = useState<{
     visible: boolean;
-    mode: SheetMode;
-    date: string;
-    duration: number;
-    rangeStart?: string;
-    rangeEnd?: string;
-    rangeLength?: number;
-  }>({ visible: false, mode: "log", date: "", duration: 5 });
+    rangeStart: string;
+    rangeEnd: string;
+    rangeLength: number;
+  } | null>(null);
+
+  // Monotonically-increasing token. Every mutation increments it; any async
+  // continuation that finds the token has moved on bails out — this is what
+  // keeps rapid taps from re-introducing stale state.
+  const seqRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!accessToken) return;
+    const seq = ++seqRef.current;
     try {
-      const [nextPrediction, nextCycleDays, nextCatalog, nextMoodStats] = await Promise.all([
-        api.cyclePrediction(accessToken).catch(() => null),
+      const [allCycles, monthDays, nextCatalog, nextMoodStats] = await Promise.all([
+        api.listCycles(accessToken),
         api.listCycleDays(accessToken, calMonth.month + 1, calMonth.year),
         api.listSymptomsCatalog(accessToken),
         api.moodStats(accessToken).catch(() => null),
       ]);
-      setPrediction(nextPrediction);
-      setCycleDays(nextCycleDays);
+      if (seq !== seqRef.current) return;
+      setCycles(allCycles.filter((c) => !c.is_predicted));
+      setCycleDays(monthDays);
       setCatalog(nextCatalog.slice(0, 10));
       setMoodStats(nextMoodStats);
       setError("");
     } catch (err) {
+      if (seq !== seqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load cycle data");
     }
-  }, [accessToken, calMonth]);
-  // Use primitive deps so effect only fires when values actually change
+  }, [accessToken, calMonth.year, calMonth.month]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [accessToken, calMonth.year, calMonth.month]);
 
@@ -142,76 +128,137 @@ export function PatientCycleScreen() {
     return map;
   }, [cycleDays]);
 
-  function applyPreview(date: string, duration: number) {
+  // Predictions are derived purely from the local cycle list — no server roundtrip,
+  // no stale prediction race. avg gap → project forward PREDICTION_HORIZON cycles.
+  const { avgCycleLength, predictedDates } = useMemo(() => {
+    const starts = Array.from(new Set(cycles.map((c) => c.start_date))).sort();
+    let avg = DEFAULT_CYCLE_LENGTH;
+    if (starts.length >= 2) {
+      const gaps: number[] = [];
+      for (let i = 1; i < starts.length; i++) gaps.push(diffDays(starts[i - 1], starts[i]));
+      const mean = Math.round(gaps.reduce((s, n) => s + n, 0) / gaps.length);
+      avg = Math.max(15, Math.min(45, mean));
+    }
+    const set = new Set<string>();
+    if (starts.length > 0) {
+      let cursor = starts[starts.length - 1];
+      for (let i = 0; i < PREDICTION_HORIZON; i++) {
+        cursor = addDays(cursor, avg);
+        for (let j = 0; j < PERIOD_LENGTH; j++) set.add(addDays(cursor, j));
+      }
+    }
+    return { avgCycleLength: avg, predictedDates: set };
+  }, [cycles]);
+
+  function findCycleContaining(dateKey: string): Cycle | undefined {
+    return cycles.find((c) => {
+      const end = c.end_date ?? addDays(c.start_date, PERIOD_LENGTH - 1);
+      return dateKey >= c.start_date && dateKey <= end;
+    });
+  }
+
+  function applyOptimisticPeriod(dateKey: string) {
+    const cleanupStart = addDays(dateKey, -(PERIOD_LENGTH - 1));
+    const cleanupEnd = addDays(dateKey, PERIOD_LENGTH - 1);
+
+    setCycles((prev) => {
+      const filtered = prev.filter(
+        (c) => !(c.start_date >= cleanupStart && c.start_date <= cleanupEnd)
+      );
+      const next: Cycle = {
+        id: `preview-${dateKey}`,
+        patient_id: "",
+        start_date: dateKey,
+        end_date: addDays(dateKey, PERIOD_LENGTH - 1),
+        cycle_length: null,
+        period_length: PERIOD_LENGTH,
+        is_predicted: false,
+      };
+      return [...filtered, next].sort((a, b) => a.start_date.localeCompare(b.start_date));
+    });
+
     setCycleDays((prev) => {
-      const map = new Map(prev.map((d) => [d.date, d]));
-      for (let i = 0; i < duration; i++) {
-        const d = addDays(date, i);
-        map.set(d, { id: `preview-${d}`, patient_id: "", date: d, flow_intensity: flowForDay(i, duration) });
+      const filtered = prev.filter((d) => d.date < cleanupStart || d.date > cleanupEnd);
+      const map = new Map(filtered.map((d) => [d.date, d]));
+      for (let i = 0; i < PERIOD_LENGTH; i++) {
+        const d = addDays(dateKey, i);
+        map.set(d, {
+          id: `preview-${d}`,
+          patient_id: "",
+          date: d,
+          flow_intensity: "medium",
+        });
       }
       return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
     });
   }
 
-  function removePreview(date: string, duration: number) {
-    const dates = new Set(Array.from({ length: duration }, (_, i) => addDays(date, i)));
-    setCycleDays((prev) => prev.filter((d) => !dates.has(d.date) || !d.id.startsWith("preview-")));
-  }
+  async function applyPeriodAt(dateKey: string) {
+    if (!accessToken) return;
+    const seq = ++seqRef.current;
 
-  function openSheet(dateKey: string) {
-    const flow = flowByDate.get(dateKey);
-    const marked = !!flow && flow !== "none";
-    if (marked) {
-      const range = findPeriodRange(dateKey, flowByDate);
-      setSheet({ visible: true, mode: "edit", date: dateKey, duration: range.length, rangeStart: range.start, rangeEnd: range.end, rangeLength: range.length });
-    } else {
-      // Show preview immediately on tap
-      applyPreview(dateKey, 5);
-      setSheet({ visible: true, mode: "log", date: dateKey, duration: 5 });
+    applyOptimisticPeriod(dateKey);
+
+    try {
+      await api.logPeriod(accessToken, dateKey, PERIOD_LENGTH);
+      if (seq !== seqRef.current) return;
+      const [freshCycles, freshDays] = await Promise.all([
+        api.listCycles(accessToken),
+        api.listCycleDays(accessToken, calMonth.month + 1, calMonth.year),
+      ]);
+      if (seq !== seqRef.current) return;
+      setCycles(freshCycles.filter((c) => !c.is_predicted));
+      setCycleDays(freshDays);
+    } catch {
+      if (seq !== seqRef.current) return;
+      setError("Failed to save. Please try again.");
+      void load();
     }
   }
 
-  function closeSheet() {
-    // Remove preview if user cancels
-    if (sheet.mode === "log") removePreview(sheet.date, sheet.duration);
-    setSheet((s) => ({ ...s, visible: false }));
-  }
-
-  async function confirmLogPeriod() {
-    if (!accessToken) return;
-    const { date, duration } = sheet;
-
-    // Preview is already showing — just close sheet and save in background
-    setSheet((s) => ({ ...s, visible: false }));
-
-    try {
-      const saved = await api.logPeriod(accessToken, date, duration);
-      // Swap preview entries for real DB entries
-      setCycleDays((prev) => {
-        const map = new Map(prev.map((d) => [d.date, d]));
-        saved.forEach((d) => map.set(d.date, d));
-        return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  function onDayPress(dateKey: string) {
+    const containing = findCycleContaining(dateKey);
+    if (containing) {
+      const start = containing.start_date;
+      const end = containing.end_date ?? addDays(start, PERIOD_LENGTH - 1);
+      setConfirmDelete({
+        visible: true,
+        rangeStart: start,
+        rangeEnd: end,
+        rangeLength: diffDays(start, end) + 1,
       });
-    } catch {
-      // Save failed — remove preview
-      removePreview(date, duration);
-      setError("Failed to save. Please try again.");
+    } else {
+      void applyPeriodAt(dateKey);
     }
   }
 
   async function confirmDeletePeriod() {
-    if (!accessToken || !sheet.rangeStart || !sheet.rangeEnd) return;
-    const { rangeStart, rangeEnd } = sheet;
-    const rollback = cycleDays;
+    if (!accessToken || !confirmDelete) return;
+    const seq = ++seqRef.current;
+    const { rangeStart, rangeEnd } = confirmDelete;
+    const rollbackCycles = cycles;
+    const rollbackDays = cycleDays;
 
+    setCycles((prev) =>
+      prev.filter((c) => !(c.start_date >= rangeStart && c.start_date <= rangeEnd))
+    );
     setCycleDays((prev) => prev.filter((d) => d.date < rangeStart || d.date > rangeEnd));
-    closeSheet();
+    setConfirmDelete(null);
 
     try {
       await api.deleteCycleDaysRange(accessToken, rangeStart, rangeEnd);
-      void load();
+      if (seq !== seqRef.current) return;
+      const [freshCycles, freshDays] = await Promise.all([
+        api.listCycles(accessToken),
+        api.listCycleDays(accessToken, calMonth.month + 1, calMonth.year),
+      ]);
+      if (seq !== seqRef.current) return;
+      setCycles(freshCycles.filter((c) => !c.is_predicted));
+      setCycleDays(freshDays);
     } catch {
-      setCycleDays(rollback);
+      if (seq !== seqRef.current) return;
+      setCycles(rollbackCycles);
+      setCycleDays(rollbackDays);
       setError("Failed to delete. Please try again.");
     }
   }
@@ -257,339 +304,350 @@ export function PatientCycleScreen() {
     await load();
   }
 
-  const calendar = useMemo(() => buildCalendarMonth(calMonth.year, calMonth.month), [calMonth]);
-  const cycleLength = prediction?.average_cycle_length ?? 28;
+  const calendar = useMemo(
+    () => buildCalendarMonth(calMonth.year, calMonth.month),
+    [calMonth]
+  );
 
   const today = new Date();
   const todayKey = today.toISOString().slice(0, 10);
-  const sortedDays = [...cycleDays].sort((a, b) => a.date.localeCompare(b.date));
-  const lastPeriodStart = sortedDays.find((d) => d.flow_intensity !== "none")?.date;
+
+  const lastPeriodStart = useMemo(() => {
+    const past = cycles
+      .map((c) => c.start_date)
+      .filter((s) => s <= todayKey)
+      .sort();
+    return past[past.length - 1];
+  }, [cycles, todayKey]);
+
   const dayOfCycle = lastPeriodStart
-    ? Math.min(
-        cycleLength,
-        Math.floor((today.getTime() - new Date(lastPeriodStart + "T12:00:00").getTime()) / 86400000) + 1
-      )
+    ? Math.min(avgCycleLength, diffDays(lastPeriodStart, todayKey) + 1)
     : 1;
-  const phase = getCyclePhase(dayOfCycle, cycleLength);
-  const ringPct = Math.min(1, dayOfCycle / cycleLength);
-  const monthLabel = new Date(calMonth.year, calMonth.month, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
+  const phase = getCyclePhase(dayOfCycle, avgCycleLength);
+  const ringPct = Math.min(1, dayOfCycle / avgCycleLength);
+  const monthLabel = new Date(calMonth.year, calMonth.month, 1).toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
   const moodDist = moodStats?.mood_distribution ?? {};
   const moodMax = Math.max(1, ...Object.values(moodDist));
 
-  // Preview dots for log sheet
-  const previewDots = Array.from({ length: sheet.duration }, (_, i) => {
-    const f = flowForDay(i, sheet.duration);
-    return f === "heavy" ? PERIOD_DARK : f === "medium" ? PERIOD_COLOR : PERIOD_LIGHT;
-  });
-
   return (
     <View style={{ flex: 1 }}>
-    <AppScreen>
-      <View style={styles.headerRow}>
-        <Text style={styles.title}>My Cycle</Text>
-        <View style={styles.bellPill}>
-          <Feather name="bell" size={16} color={PERIOD_COLOR} />
+      <AppScreen>
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>My Cycle</Text>
+          <View style={styles.bellPill}>
+            <Feather name="bell" size={16} color={PERIOD_COLOR} />
+          </View>
         </View>
-      </View>
 
-      <GlassCard style={styles.heroCard}>
-        <View style={styles.ring}>
-          <View style={[styles.ringFill, { borderColor: phase.color, opacity: 0.25 }]} />
-          <View style={[styles.ringFill, {
-            borderColor: phase.color,
-            borderTopColor: ringPct > 0.25 ? phase.color : "transparent",
-            borderRightColor: ringPct > 0.5 ? phase.color : "transparent",
-            borderBottomColor: ringPct > 0.75 ? phase.color : "transparent",
-            borderLeftColor: ringPct > 0 ? phase.color : "transparent",
-          }]} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.heroEyebrow}>Current Phase</Text>
-          <Text style={styles.heroPhase}>{phase.name}</Text>
-          <Text style={styles.heroDay}>Day {dayOfCycle} of {cycleLength}</Text>
-        </View>
-      </GlassCard>
-
-      <View style={styles.statRow}>
-        <GlassCard style={[styles.statCard, { backgroundColor: PERIOD_BG }]}>
-          <Feather name="droplet" size={20} color={PERIOD_COLOR} />
-          <Text style={styles.statLabel}>Regularity</Text>
-          <Text style={styles.statValue}>{prediction ? "Good" : "—"}</Text>
+        <GlassCard style={styles.heroCard}>
+          <View style={styles.ring}>
+            <View style={[styles.ringFill, { borderColor: phase.color, opacity: 0.25 }]} />
+            <View style={[styles.ringFill, {
+              borderColor: phase.color,
+              borderTopColor: ringPct > 0.25 ? phase.color : "transparent",
+              borderRightColor: ringPct > 0.5 ? phase.color : "transparent",
+              borderBottomColor: ringPct > 0.75 ? phase.color : "transparent",
+              borderLeftColor: ringPct > 0 ? phase.color : "transparent",
+            }]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroEyebrow}>Current Phase</Text>
+            <Text style={styles.heroPhase}>{phase.name}</Text>
+            <Text style={styles.heroDay}>Day {dayOfCycle} of {avgCycleLength}</Text>
+          </View>
         </GlassCard>
-        <GlassCard style={[styles.statCard, { backgroundColor: PERIOD_BG }]}>
-          <Feather name="meh" size={20} color={PERIOD_COLOR} />
-          <Text style={styles.statLabel}>Stress</Text>
-          <Text style={styles.statValue}>
-            {moodStats?.average_stress
-              ? moodStats.average_stress < 2.5 ? "Low" : moodStats.average_stress < 3.5 ? "Med" : "High"
-              : "—"}
-          </Text>
-        </GlassCard>
-      </View>
 
-      <View style={styles.tabBar}>
-        {(["overview", "log", "mood"] as const).map((t) => (
-          <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
-            <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-              {t === "overview" ? "Calendar" : t === "log" ? "Log" : "Mood"}
+        <View style={styles.statRow}>
+          <GlassCard style={[styles.statCard, { backgroundColor: PERIOD_BG }]}>
+            <Feather name="droplet" size={20} color={PERIOD_COLOR} />
+            <Text style={styles.statLabel}>Regularity</Text>
+            <Text style={styles.statValue}>{cycles.length >= 2 ? "Good" : "—"}</Text>
+          </GlassCard>
+          <GlassCard style={[styles.statCard, { backgroundColor: PERIOD_BG }]}>
+            <Feather name="meh" size={20} color={PERIOD_COLOR} />
+            <Text style={styles.statLabel}>Stress</Text>
+            <Text style={styles.statValue}>
+              {moodStats?.average_stress
+                ? moodStats.average_stress < 2.5
+                  ? "Low"
+                  : moodStats.average_stress < 3.5
+                  ? "Med"
+                  : "High"
+                : "—"}
             </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {tab === "overview" && (
-        <GlassCard>
-          <View style={styles.calHeader}>
-            <Pressable onPress={() => shiftMonth(-1)} style={styles.calNavBtn}>
-              <Feather name="chevron-left" size={18} color={PERIOD_COLOR} />
-            </Pressable>
-            <Text style={styles.cardTitle}>{monthLabel}</Text>
-            <Pressable onPress={() => shiftMonth(1)} style={styles.calNavBtn}>
-              <Feather name="chevron-right" size={18} color={PERIOD_COLOR} />
-            </Pressable>
-          </View>
-          <View style={styles.weekHeader}>
-            {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
-              <Text key={i} style={styles.weekHeaderCell}>{d}</Text>
-            ))}
-          </View>
-          <View style={styles.calendarGrid}>
-            {calendar.cells.map((day, idx) => {
-              if (!day) return <View key={idx} style={styles.dayCell} />;
-              const dateKey = `${calendar.year}-${String(calendar.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-              const flow = flowByDate.get(dateKey);
-              const hasFlow = !!flow && flow !== "none";
-              const isToday = dateKey === todayKey;
-              const colIdx = idx % 7;
-
-              const hasPrev = hasFlow
-                && flowByDate.has(addDays(dateKey, -1))
-                && flowByDate.get(addDays(dateKey, -1)) !== "none"
-                && colIdx > 0;
-              const hasNext = hasFlow
-                && flowByDate.has(addDays(dateKey, 1))
-                && flowByDate.get(addDays(dateKey, 1)) !== "none"
-                && colIdx < 6;
-
-              const circleColor = flow === "heavy" ? PERIOD_DARK
-                : flow === "medium" ? PERIOD_COLOR
-                : flow === "light" ? PERIOD_LIGHT
-                : null;
-
-              return (
-                <Pressable key={idx} style={styles.dayCell} onPress={() => openSheet(dateKey)}>
-                  {hasFlow && (
-                    <View style={[
-                      styles.rangeStrip,
-                      !hasPrev && styles.rangeStripStart,
-                      !hasNext && styles.rangeStripEnd,
-                    ]} />
-                  )}
-                  <View style={[
-                    styles.dayInner,
-                    circleColor ? { backgroundColor: circleColor } : null,
-                    isToday && !circleColor && styles.dayToday,
-                  ]}>
-                    <Text style={[
-                      styles.dayText,
-                      circleColor && styles.dayTextLight,
-                      isToday && !circleColor && styles.dayTextToday,
-                    ]}>
-                      {day}
-                    </Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <View style={styles.hintRow}>
-            <Feather name="info" size={12} color="#B09ABF" />
-            <Text style={styles.hintText}>Tap any date to log period · Tap marked day to edit</Text>
-          </View>
-        </GlassCard>
-      )}
-
-      {tab === "log" && (
-        <>
-          <GlassCard>
-            <Text style={styles.cardTitle}>Log today's flow</Text>
-            <View style={styles.flowRow}>
-              {flowOptions.map((f) => (
-                <Pressable
-                  key={f.key}
-                  onPress={() => setSelectedFlow(f.key)}
-                  style={[styles.flowDot, { borderColor: f.color }, selectedFlow === f.key && { backgroundColor: f.color }]}
-                >
-                  <Text style={[styles.flowText, selectedFlow === f.key && styles.flowTextActive]}>{f.key}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <AppInput label="Notes" value={cycleNotes} onChangeText={setCycleNotes} />
-            <PrimaryButton label="Save cycle log" onPress={logCycleDay} />
           </GlassCard>
+        </View>
 
+        <View style={styles.tabBar}>
+          {(["overview", "log", "mood"] as const).map((t) => (
+            <Pressable
+              key={t}
+              onPress={() => setTab(t)}
+              style={[styles.tab, tab === t && styles.tabActive]}
+            >
+              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                {t === "overview" ? "Calendar" : t === "log" ? "Log" : "Mood"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {tab === "overview" && (
           <GlassCard>
-            <Text style={styles.cardTitle}>Log symptom</Text>
-            <View style={styles.chipRow}>
-              {catalog.map((symptom) => (
-                <Pressable
-                  key={symptom.id}
-                  onPress={() => setSelectedSymptom(symptom.id)}
-                  style={[styles.chip, selectedSymptom === symptom.id && styles.chipActive]}
-                >
-                  <Text style={[styles.chipText, selectedSymptom === symptom.id && styles.chipTextActive]}>
-                    {symptom.name}
-                  </Text>
-                </Pressable>
+            <View style={styles.calHeader}>
+              <Pressable onPress={() => shiftMonth(-1)} style={styles.calNavBtn}>
+                <Feather name="chevron-left" size={18} color={PERIOD_COLOR} />
+              </Pressable>
+              <Text style={styles.cardTitle}>{monthLabel}</Text>
+              <Pressable onPress={() => shiftMonth(1)} style={styles.calNavBtn}>
+                <Feather name="chevron-right" size={18} color={PERIOD_COLOR} />
+              </Pressable>
+            </View>
+            <View style={styles.weekHeader}>
+              {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
+                <Text key={i} style={styles.weekHeaderCell}>{d}</Text>
               ))}
             </View>
-            <Text style={styles.cardLabel}>Severity: {severity}</Text>
-            <View style={styles.severityRow}>
-              {[1, 2, 3, 4, 5].map((s) => (
-                <Pressable key={s} onPress={() => setSeverity(s)} style={[styles.sevDot, severity >= s && styles.sevDotActive]} />
-              ))}
-            </View>
-            <PrimaryButton label="Save symptom" onPress={logSymptom} disabled={!selectedSymptom} />
-          </GlassCard>
-        </>
-      )}
+            <View style={styles.calendarGrid}>
+              {calendar.cells.map((day, idx) => {
+                if (!day) return <View key={idx} style={styles.dayCell} />;
+                const dateKey = `${calendar.year}-${String(calendar.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                const flow = flowByDate.get(dateKey);
+                const hasFlow = !!flow && flow !== "none";
+                const isToday = dateKey === todayKey;
+                const isPredicted = !hasFlow && !isToday && predictedDates.has(dateKey);
+                const colIdx = idx % 7;
 
-      {tab === "mood" && (
-        <>
-          <GlassCard>
-            <Text style={styles.cardTitle}>Mood Report</Text>
-            <View style={styles.moodChart}>
-              {moods.map((m) => {
-                const count = moodDist[m] || 0;
+                const hasPrev =
+                  hasFlow &&
+                  flowByDate.has(addDays(dateKey, -1)) &&
+                  flowByDate.get(addDays(dateKey, -1)) !== "none" &&
+                  colIdx > 0;
+                const hasNext =
+                  hasFlow &&
+                  flowByDate.has(addDays(dateKey, 1)) &&
+                  flowByDate.get(addDays(dateKey, 1)) !== "none" &&
+                  colIdx < 6;
+
                 return (
-                  <View key={m} style={styles.barWrap}>
-                    <View style={styles.barTrack}>
-                      <View style={[styles.barFill, { height: `${(count / moodMax) * 100}%` }]} />
+                  <Pressable key={idx} style={styles.dayCell} onPress={() => onDayPress(dateKey)}>
+                    {hasFlow && (
+                      <View
+                        style={[
+                          styles.rangeStrip,
+                          !hasPrev && styles.rangeStripStart,
+                          !hasNext && styles.rangeStripEnd,
+                        ]}
+                      />
+                    )}
+                    <View
+                      style={[
+                        styles.dayInner,
+                        hasFlow && styles.dayConfirmed,
+                        isPredicted && styles.dayPredicted,
+                        isToday && !hasFlow && styles.dayToday,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dayText,
+                          hasFlow && styles.dayTextLight,
+                          isPredicted && styles.dayTextPredicted,
+                          isToday && !hasFlow && styles.dayTextToday,
+                        ]}
+                      >
+                        {day}
+                      </Text>
                     </View>
-                    <Text style={styles.barLabel}>{m.slice(0, 3)}</Text>
-                    <Text style={styles.barValue}>{count}</Text>
-                  </View>
+                  </Pressable>
                 );
               })}
             </View>
-            <View style={styles.miniStatRow}>
+
+            <View style={styles.legendRow}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: PERIOD_COLOR }]} />
+                <Text style={styles.legendText}>Logged period</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, styles.legendDotPredicted]} />
+                <Text style={styles.legendText}>Predicted</Text>
+              </View>
+            </View>
+
+            <View style={styles.hintRow}>
+              <Feather name="info" size={12} color="#B09ABF" />
+              <Text style={styles.hintText}>
+                Tap a date to log a 5-day period · Tap marked day to remove
+              </Text>
+            </View>
+          </GlassCard>
+        )}
+
+        {tab === "log" && (
+          <>
+            <GlassCard>
+              <Text style={styles.cardTitle}>Log today's flow</Text>
+              <View style={styles.flowRow}>
+                {flowOptions.map((f) => (
+                  <Pressable
+                    key={f.key}
+                    onPress={() => setSelectedFlow(f.key)}
+                    style={[
+                      styles.flowDot,
+                      { borderColor: f.color },
+                      selectedFlow === f.key && { backgroundColor: f.color },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.flowText,
+                        selectedFlow === f.key && styles.flowTextActive,
+                      ]}
+                    >
+                      {f.key}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <AppInput label="Notes" value={cycleNotes} onChangeText={setCycleNotes} />
+              <PrimaryButton label="Save cycle log" onPress={logCycleDay} />
+            </GlassCard>
+
+            <GlassCard>
+              <Text style={styles.cardTitle}>Log symptom</Text>
+              <View style={styles.chipRow}>
+                {catalog.map((symptom) => (
+                  <Pressable
+                    key={symptom.id}
+                    onPress={() => setSelectedSymptom(symptom.id)}
+                    style={[styles.chip, selectedSymptom === symptom.id && styles.chipActive]}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        selectedSymptom === symptom.id && styles.chipTextActive,
+                      ]}
+                    >
+                      {symptom.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.cardLabel}>Severity: {severity}</Text>
+              <View style={styles.severityRow}>
+                {[1, 2, 3, 4, 5].map((s) => (
+                  <Pressable
+                    key={s}
+                    onPress={() => setSeverity(s)}
+                    style={[styles.sevDot, severity >= s && styles.sevDotActive]}
+                  />
+                ))}
+              </View>
+              <PrimaryButton label="Save symptom" onPress={logSymptom} disabled={!selectedSymptom} />
+            </GlassCard>
+          </>
+        )}
+
+        {tab === "mood" && (
+          <>
+            <GlassCard>
+              <Text style={styles.cardTitle}>Mood Report</Text>
+              <View style={styles.moodChart}>
+                {moods.map((m) => {
+                  const count = moodDist[m] || 0;
+                  return (
+                    <View key={m} style={styles.barWrap}>
+                      <View style={styles.barTrack}>
+                        <View style={[styles.barFill, { height: `${(count / moodMax) * 100}%` }]} />
+                      </View>
+                      <Text style={styles.barLabel}>{m.slice(0, 3)}</Text>
+                      <Text style={styles.barValue}>{count}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              <View style={styles.miniStatRow}>
+                {[
+                  { label: "Energy", val: moodStats?.average_energy },
+                  { label: "Stress", val: moodStats?.average_stress },
+                  { label: "Sleep", val: moodStats?.average_sleep },
+                ].map(({ label, val }) => (
+                  <View key={label} style={styles.miniStat}>
+                    <Text style={styles.miniStatLabel}>{label}</Text>
+                    <Text style={styles.miniStatValue}>{val?.toFixed(1) ?? "--"}</Text>
+                  </View>
+                ))}
+              </View>
+            </GlassCard>
+
+            <GlassCard>
+              <Text style={styles.cardTitle}>How are you feeling?</Text>
+              <View style={styles.chipRow}>
+                {moods.map((m) => (
+                  <Pressable
+                    key={m}
+                    onPress={() => setSelectedMood(m)}
+                    style={[styles.chip, selectedMood === m && styles.chipActive]}
+                  >
+                    <Text
+                      style={[styles.chipText, selectedMood === m && styles.chipTextActive]}
+                    >
+                      {m}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               {[
-                { label: "Energy", val: moodStats?.average_energy },
-                { label: "Stress", val: moodStats?.average_stress },
-                { label: "Sleep", val: moodStats?.average_sleep },
-              ].map(({ label, val }) => (
-                <View key={label} style={styles.miniStat}>
-                  <Text style={styles.miniStatLabel}>{label}</Text>
-                  <Text style={styles.miniStatValue}>{val?.toFixed(1) ?? "--"}</Text>
-                </View>
+                { label: "Energy", val: energy, set: setEnergy },
+                { label: "Stress", val: stress, set: setStress },
+                { label: "Sleep", val: sleep, set: setSleep },
+              ].map(({ label, val, set }) => (
+                <React.Fragment key={label}>
+                  <Text style={styles.cardLabel}>{label}: {val}</Text>
+                  <View style={styles.severityRow}>
+                    {[1, 2, 3, 4, 5].map((s) => (
+                      <Pressable
+                        key={s}
+                        onPress={() => set(s)}
+                        style={[styles.sevDot, val >= s && styles.sevDotActive]}
+                      />
+                    ))}
+                  </View>
+                </React.Fragment>
               ))}
-            </View>
-          </GlassCard>
+              <PrimaryButton label="Save mood" onPress={logMood} />
+            </GlassCard>
+          </>
+        )}
 
-          <GlassCard>
-            <Text style={styles.cardTitle}>How are you feeling?</Text>
-            <View style={styles.chipRow}>
-              {moods.map((m) => (
-                <Pressable key={m} onPress={() => setSelectedMood(m)} style={[styles.chip, selectedMood === m && styles.chipActive]}>
-                  <Text style={[styles.chipText, selectedMood === m && styles.chipTextActive]}>{m}</Text>
-                </Pressable>
-              ))}
-            </View>
-            {[
-              { label: "Energy", val: energy, set: setEnergy },
-              { label: "Stress", val: stress, set: setStress },
-              { label: "Sleep", val: sleep, set: setSleep },
-            ].map(({ label, val, set }) => (
-              <React.Fragment key={label}>
-                <Text style={styles.cardLabel}>{label}: {val}</Text>
-                <View style={styles.severityRow}>
-                  {[1, 2, 3, 4, 5].map((s) => (
-                    <Pressable key={s} onPress={() => set(s)} style={[styles.sevDot, val >= s && styles.sevDotActive]} />
-                  ))}
-                </View>
-              </React.Fragment>
-            ))}
-            <PrimaryButton label="Save mood" onPress={logMood} />
-          </GlassCard>
-        </>
-      )}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+      </AppScreen>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-    </AppScreen>
-
-    {/* Bottom sheet — plain View to avoid Modal focus events triggering reload */}
-    {sheet.visible && (
-      <View style={styles.overlayWrap}>
-        <Pressable style={styles.overlayBg} onPress={closeSheet} />
-        <View style={styles.sheet}>
+      {confirmDelete?.visible && (
+        <View style={styles.overlayWrap}>
+          <Pressable style={styles.overlayBg} onPress={() => setConfirmDelete(null)} />
+          <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Period logged</Text>
+            <Text style={styles.sheetDate}>
+              {`${formatDate(confirmDelete.rangeStart)} – ${formatDate(confirmDelete.rangeEnd)} · ${confirmDelete.rangeLength} days`}
+            </Text>
 
-            {sheet.mode === "log" ? (
-              <>
-                <Text style={styles.sheetTitle}>Log period</Text>
-                <Text style={styles.sheetDate}>
-                  {sheet.date ? formatDate(sheet.date, { weekday: "long", month: "long", day: "numeric" }) : ""}
-                </Text>
+            <Pressable style={styles.deleteBtn} onPress={confirmDeletePeriod}>
+              <Feather name="trash-2" size={16} color="#E25555" />
+              <Text style={styles.deleteBtnText}>Delete period</Text>
+            </Pressable>
 
-                <Text style={styles.sheetLabel}>Duration</Text>
-                <View style={styles.durationRow}>
-                  <Pressable
-                    onPress={() => setSheet((s) => {
-                      const next = Math.max(1, s.duration - 1);
-                      applyPreview(s.date, next);
-                      return { ...s, duration: next };
-                    })}
-                    style={styles.durationBtn}
-                  >
-                    <Text style={styles.durationBtnText}>−</Text>
-                  </Pressable>
-                  <Text style={styles.durationValue}>{sheet.duration} days</Text>
-                  <Pressable
-                    onPress={() => setSheet((s) => {
-                      const next = Math.min(10, s.duration + 1);
-                      applyPreview(s.date, next);
-                      return { ...s, duration: next };
-                    })}
-                    style={styles.durationBtn}
-                  >
-                    <Text style={styles.durationBtnText}>+</Text>
-                  </Pressable>
-                </View>
-
-                <View style={styles.previewRow}>
-                  {previewDots.map((color, i) => (
-                    <View key={i} style={[styles.previewDot, { backgroundColor: color }]} />
-                  ))}
-                </View>
-
-                <PrimaryButton label="Confirm" onPress={confirmLogPeriod} />
-                <Pressable onPress={closeSheet} style={styles.cancelBtn}>
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Text style={styles.sheetTitle}>Period logged</Text>
-                <Text style={styles.sheetDate}>
-                  {sheet.rangeStart && sheet.rangeEnd
-                    ? `${formatDate(sheet.rangeStart)} – ${formatDate(sheet.rangeEnd)} · ${sheet.rangeLength} days`
-                    : ""}
-                </Text>
-
-                <Pressable style={styles.deleteBtn} onPress={confirmDeletePeriod}>
-                  <Feather name="trash-2" size={16} color="#E25555" />
-                  <Text style={styles.deleteBtnText}>Delete period</Text>
-                </Pressable>
-
-                <Pressable onPress={closeSheet} style={styles.cancelBtn}>
-                  <Text style={styles.cancelText}>Close</Text>
-                </Pressable>
-              </>
-            )}
+            <Pressable onPress={() => setConfirmDelete(null)} style={styles.cancelBtn}>
+              <Text style={styles.cancelText}>Close</Text>
+            </Pressable>
           </View>
-      </View>
-    )}
+        </View>
+      )}
     </View>
   );
 }
@@ -625,10 +683,28 @@ const styles = StyleSheet.create({
   rangeStripStart: { left: "50%" },
   rangeStripEnd: { right: "50%" },
   dayInner: { flex: 1, borderRadius: 999, alignItems: "center", justifyContent: "center" },
+  dayConfirmed: { backgroundColor: PERIOD_COLOR },
+  dayPredicted: {
+    borderWidth: 1.5,
+    borderColor: PERIOD_COLOR,
+    borderStyle: "dashed",
+    backgroundColor: "transparent",
+  },
   dayToday: { borderWidth: 1.5, borderColor: PERIOD_COLOR },
   dayText: { fontSize: 12, color: "#231F29", fontWeight: "600" },
   dayTextLight: { color: "#FFFFFF" },
+  dayTextPredicted: { color: PERIOD_COLOR, fontWeight: "700" },
   dayTextToday: { color: PERIOD_COLOR, fontWeight: "800" },
+  legendRow: { flexDirection: "row", gap: 16, marginTop: 12, justifyContent: "center" },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
+  legendDot: { width: 12, height: 12, borderRadius: 6 },
+  legendDotPredicted: {
+    backgroundColor: "transparent",
+    borderWidth: 1.5,
+    borderColor: PERIOD_COLOR,
+    borderStyle: "dashed",
+  },
+  legendText: { fontSize: 11, color: "#7F7486", fontWeight: "600" },
   hintRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 10 },
   hintText: { fontSize: 11, color: "#B09ABF" },
   flowRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
@@ -654,20 +730,12 @@ const styles = StyleSheet.create({
   miniStatLabel: { fontSize: 11, color: "#7F7486" },
   miniStatValue: { fontSize: 16, fontWeight: "800", color: PERIOD_COLOR, marginTop: 2 },
   error: { color: "#E25555" },
-  // Bottom sheet
   overlayWrap: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-end", zIndex: 100 },
   overlayBg: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.4)" },
   sheet: { backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 48, gap: 12 },
   sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#E0D5E8", alignSelf: "center", marginBottom: 4 },
   sheetTitle: { fontSize: 20, fontWeight: "800", color: "#231F29" },
   sheetDate: { fontSize: 14, color: "#7F7486", marginTop: -4 },
-  sheetLabel: { fontSize: 13, fontWeight: "700", color: "#231F29", marginTop: 4 },
-  durationRow: { flexDirection: "row", alignItems: "center", gap: 16 },
-  durationBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: PERIOD_BG, alignItems: "center", justifyContent: "center" },
-  durationBtnText: { fontSize: 24, color: PERIOD_COLOR, fontWeight: "700", lineHeight: 28 },
-  durationValue: { fontSize: 18, fontWeight: "800", color: "#231F29", flex: 1, textAlign: "center" },
-  previewRow: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
-  previewDot: { width: 26, height: 26, borderRadius: 13 },
   deleteBtn: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 14, borderWidth: 1.5, borderColor: "#E25555", justifyContent: "center" },
   deleteBtnText: { fontSize: 14, fontWeight: "700", color: "#E25555" },
   cancelBtn: { alignItems: "center", paddingVertical: 8 },

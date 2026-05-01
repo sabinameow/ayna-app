@@ -51,6 +51,8 @@ export type CyclePrediction = {
   predicted_end_date: string;
   predicted_ovulation_date: string;
   average_cycle_length: number;
+  average_period_length: number;
+  upcoming_starts: string[];
 };
 
 export type Cycle = {
