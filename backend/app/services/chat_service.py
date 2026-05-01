@@ -14,23 +14,37 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, dict[str, WebSocket]] = {}
 
+    async def register(self, session_id: str, user_id: str, websocket: WebSocket) -> Optional[WebSocket]:
+        """Register an already-accepted socket. If the same (session,user) had a
+        previous socket, return it so the caller can close it cleanly."""
+        previous = self.active_connections.get(session_id, {}).get(user_id)
+        self.active_connections.setdefault(session_id, {})[user_id] = websocket
+        return previous
+
     async def connect(self, session_id: str, user_id: str, websocket: WebSocket):
         await websocket.accept()
-        if session_id not in self.active_connections:
-            self.active_connections[session_id] = {}
-        self.active_connections[session_id][user_id] = websocket
+        await self.register(session_id, user_id, websocket)
 
-    def disconnect(self, session_id: str, user_id: str):
-        if session_id in self.active_connections:
-            self.active_connections[session_id].pop(user_id, None)
-            if not self.active_connections[session_id]:
-                del self.active_connections[session_id]
+    def disconnect(self, session_id: str, user_id: str, websocket: Optional[WebSocket] = None):
+        bucket = self.active_connections.get(session_id)
+        if not bucket:
+            return
+        # Only remove if it is the same socket (avoid race where reconnect already replaced it)
+        if websocket is None or bucket.get(user_id) is websocket:
+            bucket.pop(user_id, None)
+        if not bucket:
+            self.active_connections.pop(session_id, None)
 
-    async def send_to_session(self, session_id: str, sender_id: str, message: dict):
-        if session_id in self.active_connections:
-            for uid, ws in self.active_connections[session_id].items():
-                if uid != sender_id:
-                    await ws.send_json(message)
+    async def send_to_session(self, session_id: str, message: dict):
+        bucket = self.active_connections.get(session_id)
+        if not bucket:
+            return
+        # Snapshot to be safe against mutation during iteration
+        for ws in list(bucket.values()):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass
 
 
 manager = ConnectionManager()

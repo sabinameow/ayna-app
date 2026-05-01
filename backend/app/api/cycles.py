@@ -52,7 +52,7 @@ async def get_predictions(
         raise NotFoundException("Patient profile not found")
     prediction = await predict_next_cycle(db, patient.id)
     if not prediction:
-        raise NotFoundException("Not enough cycle data for prediction (need at least 2 cycles)")
+        raise NotFoundException("No cycle data yet — log a period to see predictions")
     return prediction
 
 

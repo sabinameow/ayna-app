@@ -16,7 +16,6 @@ from backend.app.schemas.appointment import AppointmentOut, AppointmentUpdate, A
 from backend.app.schemas.doctor import ScheduleOut
 from backend.app.schemas.manager import ManagerOut
 from backend.app.services.chat_service import close_session, get_session_messages
-from backend.app.services.ai_service import summarize_chat_for_doctor
 from backend.app.services.appointment_service import get_available_slots
 
 router = APIRouter(prefix="/manager", tags=["Manager"])
@@ -89,7 +88,6 @@ async def close_chat_session(
         raise ForbiddenException("Not your session")
 
     closed = await close_session(db, session_id)
-    await summarize_chat_for_doctor(db, session_id)
     return closed
 
 

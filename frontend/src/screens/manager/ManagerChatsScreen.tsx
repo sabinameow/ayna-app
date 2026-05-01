@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -12,13 +12,20 @@ import {
 import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
-import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
+import { useChatSocket } from "@/hooks/useChatSocket";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import type { ConnectionStatus } from "@/services/chatSocket";
 import type { ChatMessage, ChatSession } from "@/types/api";
 import { formatDateTime, truncateId } from "@/utils/format";
 
 type SessionTab = "open" | "closed" | "all";
+
+type LocalMessage = ChatMessage & { client_id?: string; pending?: boolean };
+
+function newClientId() {
+  return `c_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // ── Session list item ─────────────────────────────────────────────────────────
 function SessionCard({
@@ -40,11 +47,6 @@ function SessionCard({
       <View style={{ flex: 1 }}>
         <Text style={sCardStyles.id}>Session {truncateId(session.id)}</Text>
         <Text style={sCardStyles.meta}>{formatDateTime(session.created_at)}</Text>
-        {session.summary ? (
-          <Text style={sCardStyles.summary} numberOfLines={1}>
-            {session.summary}
-          </Text>
-        ) : null}
       </View>
       <View
         style={[sCardStyles.badge, isOpen ? sCardStyles.badgeOpen : sCardStyles.badgeClosed]}
@@ -80,7 +82,6 @@ const sCardStyles = StyleSheet.create({
   dotClosed: { backgroundColor: "#B0A8B9" },
   id: { fontWeight: "700", color: "#231F29", fontSize: 14 },
   meta: { color: "#6E7760", fontSize: 12, marginTop: 2 },
-  summary: { color: "#6E7760", fontSize: 12, marginTop: 4, fontStyle: "italic" },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
   badgeOpen: { backgroundColor: "#EEF7D8" },
   badgeClosed: { backgroundColor: "#F2F4F8" },
@@ -93,18 +94,26 @@ const sCardStyles = StyleSheet.create({
 function MessageBubble({
   message,
   isManager,
+  pending,
 }: {
   message: ChatMessage;
   isManager: boolean;
+  pending?: boolean;
 }) {
   return (
     <View style={[bubbleStyles.row, isManager && bubbleStyles.rowRight]}>
-      <View style={[bubbleStyles.bubble, isManager ? bubbleStyles.managerBubble : bubbleStyles.patientBubble]}>
+      <View
+        style={[
+          bubbleStyles.bubble,
+          isManager ? bubbleStyles.managerBubble : bubbleStyles.patientBubble,
+          pending && bubbleStyles.bubblePending,
+        ]}
+      >
         <Text style={[bubbleStyles.text, isManager && bubbleStyles.textManager]}>
           {message.content}
         </Text>
         <Text style={[bubbleStyles.time, isManager && bubbleStyles.timeManager]}>
-          {formatDateTime(message.sent_at)}
+          {pending ? "Sending…" : formatDateTime(message.sent_at)}
         </Text>
       </View>
     </View>
@@ -121,6 +130,7 @@ const bubbleStyles = StyleSheet.create({
   },
   patientBubble: { backgroundColor: "#F2F4F8", borderBottomLeftRadius: 4 },
   managerBubble: { backgroundColor: "#8AAF2B", borderBottomRightRadius: 4 },
+  bubblePending: { opacity: 0.6 },
   text: { color: "#231F29", fontSize: 14, lineHeight: 20 },
   textManager: { color: "#FFF" },
   time: { fontSize: 10, color: "#7F7486", marginTop: 4 },
@@ -131,12 +141,16 @@ const bubbleStyles = StyleSheet.create({
 export function ManagerChatsScreen() {
   const { accessToken, user } = useAuth();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [selected, setSelected] = useState<ChatSession | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionTab, setSessionTab] = useState<SessionTab>("open");
-  const socketRef = useRef<WebSocket | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
+
+  const selected = useMemo(
+    () => sessions.find((s) => s.id === selectedId) ?? null,
+    [sessions, selectedId]
+  );
 
   const loadSessions = useCallback(() => {
     if (!accessToken) return;
@@ -147,33 +161,71 @@ export function ManagerChatsScreen() {
   }, [accessToken]);
   useFocusReload(loadSessions);
 
+  // Load history for the selected session
   useEffect(() => {
-    if (!accessToken || !selected) return;
-    void api.managerMessages(accessToken, selected.id).then((msgs) => {
+    if (!accessToken || !selectedId) {
+      setMessages([]);
+      return;
+    }
+    void api.managerMessages(accessToken, selectedId).then((msgs) => {
       setMessages(msgs);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 100);
     });
-    socketRef.current?.close();
-    const socket = new WebSocket(api.makeManagerChatSocket(accessToken, selected.id));
-    socket.onmessage = (event) => {
-      const incoming = JSON.parse(event.data) as ChatMessage;
-      setMessages((prev) => [...prev, incoming]);
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
-    };
-    socketRef.current = socket;
-    return () => socket.close();
-  }, [accessToken, selected]);
+  }, [accessToken, selectedId]);
+
+  const handleIncoming = useCallback((raw: unknown) => {
+    if (!raw || typeof raw !== "object") return;
+    const evt = raw as { type?: string };
+    if (evt.type !== "message") return;
+    const incoming = raw as ChatMessage & { client_id?: string };
+    if (!incoming.id || !incoming.session_id) return;
+
+    setMessages((prev) => {
+      if (incoming.client_id) {
+        const idx = prev.findIndex((m) => m.client_id === incoming.client_id);
+        if (idx !== -1) {
+          const next = prev.slice();
+          next[idx] = { ...incoming, client_id: incoming.client_id, pending: false };
+          return next;
+        }
+      }
+      if (prev.some((m) => m.id === incoming.id)) return prev;
+      return [...prev, { ...incoming, pending: false }];
+    });
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+  }, []);
+
+  // URL keyed on selectedId (string), not the session object — prevents
+  // socket churn when the same session reference changes after an update.
+  const socketUrl = useMemo(
+    () => (accessToken && selectedId ? api.makeManagerChatSocket(accessToken, selectedId) : null),
+    [accessToken, selectedId]
+  );
+
+  const { status, send: socketSend } = useChatSocket({ url: socketUrl, onMessage: handleIncoming });
 
   function send() {
-    if (!socketRef.current || !input.trim()) return;
-    socketRef.current.send(JSON.stringify({ content: input.trim() }));
+    const body = input.trim();
+    if (!body || !user?.id || !selectedId) return;
+    const client_id = newClientId();
+    const optimistic: LocalMessage = {
+      id: client_id,
+      client_id,
+      session_id: selectedId,
+      sender_id: user.id,
+      content: body,
+      sent_at: new Date().toISOString(),
+      pending: true,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    socketSend({ type: "message", content: body, client_id, sent_at: optimistic.sent_at });
     setInput("");
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }
 
   async function closeSession() {
-    if (!accessToken || !selected) return;
-    const closed = await api.closeManagerSession(accessToken, selected.id);
-    setSelected(closed);
+    if (!accessToken || !selectedId) return;
+    await api.closeManagerSession(accessToken, selectedId);
     const next = await api.managerSessions(accessToken);
     setSessions(next);
   }
@@ -194,13 +246,14 @@ export function ManagerChatsScreen() {
       <AppScreen scroll={false} style={styles.threadContainer}>
         {/* Patient info bar */}
         <View style={styles.threadHeader}>
-          <Pressable onPress={() => setSelected(null)} style={styles.backBtn}>
+          <Pressable onPress={() => setSelectedId(null)} style={styles.backBtn}>
             <Feather name="arrow-left" size={18} color="#8AAF2B" />
           </Pressable>
           <View style={{ flex: 1 }}>
             <Text style={styles.threadTitle}>Session {truncateId(selected.id)}</Text>
             <Text style={styles.threadMeta}>Started {formatDateTime(selected.created_at)}</Text>
           </View>
+          <ConnectionPill status={status} />
           <View
             style={[
               styles.statusChip,
@@ -212,17 +265,6 @@ export function ManagerChatsScreen() {
             </Text>
           </View>
         </View>
-
-        {/* AI summary (if closed) */}
-        {selected.summary ? (
-          <GlassCard style={styles.summaryCard}>
-            <View style={styles.summaryHeader}>
-              <Feather name="zap" size={14} color="#4F6715" />
-              <Text style={styles.summaryTitle}>AI summary</Text>
-            </View>
-            <Text style={styles.summaryBody}>{selected.summary}</Text>
-          </GlassCard>
-        ) : null}
 
         {/* Messages */}
         <ScrollView
@@ -236,9 +278,10 @@ export function ManagerChatsScreen() {
           )}
           {messages.map((msg) => (
             <MessageBubble
-              key={msg.id}
+              key={msg.client_id ?? msg.id}
               message={msg}
               isManager={msg.sender_id === user?.id}
+              pending={msg.pending}
             />
           ))}
         </ScrollView>
@@ -276,7 +319,7 @@ export function ManagerChatsScreen() {
             </View>
             <Pressable onPress={closeSession} style={styles.closeBtn}>
               <Feather name="check-circle" size={14} color="#557417" />
-              <Text style={styles.closeBtnText}>Close and summarize session</Text>
+              <Text style={styles.closeBtnText}>Close session</Text>
             </Pressable>
           </View>
         ) : (
@@ -332,7 +375,7 @@ export function ManagerChatsScreen() {
             session={s}
             active={false}
             onPress={() => {
-              setSelected(s);
+              setSelectedId(s.id);
               setMessages([]);
             }}
           />
@@ -351,6 +394,44 @@ export function ManagerChatsScreen() {
     </AppScreen>
   );
 }
+
+function ConnectionPill({ status }: { status: ConnectionStatus }) {
+  const { color, label } = pillFor(status);
+  return (
+    <View style={[pillStyles.pill, { backgroundColor: color + "22", borderColor: color }]}>
+      <View style={[pillStyles.dot, { backgroundColor: color }]} />
+      <Text style={[pillStyles.text, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+function pillFor(status: ConnectionStatus): { color: string; label: string } {
+  switch (status) {
+    case "open":
+      return { color: "#8AAF2B", label: "Online" };
+    case "connecting":
+    case "reconnecting":
+      return { color: "#D9A441", label: "Reconnecting…" };
+    case "offline":
+      return { color: "#E25555", label: "Offline" };
+    default:
+      return { color: "#B0A8B9", label: "Idle" };
+  }
+}
+
+const pillStyles = StyleSheet.create({
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  text: { fontSize: 11, fontWeight: "700" },
+});
 
 const styles = StyleSheet.create({
   threadContainer: { gap: 0, paddingBottom: 16, flex: 1 },
@@ -394,10 +475,6 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 11, fontWeight: "700" },
   statusChipTextOpen: { color: "#557417" },
   statusChipTextClosed: { color: "#7F7486" },
-  summaryCard: { backgroundColor: "#EEF7D8", marginBottom: 12 },
-  summaryHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 },
-  summaryTitle: { fontSize: 13, fontWeight: "700", color: "#4F6715" },
-  summaryBody: { color: "#4F6715", fontSize: 13, lineHeight: 20 },
   messageArea: { flex: 1 },
   messageContent: { paddingVertical: 8, gap: 4 },
   noMessages: { color: "#7F7486", fontSize: 14, textAlign: "center", marginTop: 40 },

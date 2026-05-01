@@ -18,7 +18,6 @@ from backend.app.services.chat_service import (
     get_session_messages,
 )
 from backend.app.services.cycle_service import get_patient_by_user_id
-from backend.app.services.subscription_service import has_active_subscription
 from backend.app.auth.service import decode_token
 
 
@@ -54,11 +53,6 @@ async def websocket_chat(websocket: WebSocket):
             if not patient:
                 await websocket.close(code=4003, reason="Patient profile not found")
                 return
-            if not await has_active_subscription(db, patient.id):
-                await websocket.close(
-                    code=4003, reason="Active subscription required"
-                )
-                return
             session = await get_or_create_session(db, patient.id)
             await db.commit()
         elif user.role == UserRole.MANAGER:
@@ -82,13 +76,36 @@ async def websocket_chat(websocket: WebSocket):
             await websocket.close(code=4003, reason="Role not allowed")
             return
 
-    await connection_manager.connect(str(session.id), str(user.id), websocket)
+    await websocket.accept()
+    previous = await connection_manager.register(str(session.id), str(user.id), websocket)
+    if previous is not None:
+        try:
+            await previous.close(code=4009, reason="reconnect")
+        except Exception:
+            pass
+
+    try:
+        await websocket.send_json({
+            "type": "system",
+            "event": "connected",
+            "session_id": str(session.id),
+        })
+    except Exception:
+        pass
+
     try:
         while True:
             data = await websocket.receive_json()
+            msg_type = (data or {}).get("type", "message")
+
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
             content = (data or {}).get("content", "").strip()
             if not content:
                 continue
+            client_id = (data or {}).get("client_id")
 
             async with AsyncSessionLocal() as db:
                 msg = await save_message(db, session.id, user.id, content)
@@ -96,17 +113,20 @@ async def websocket_chat(websocket: WebSocket):
 
             await connection_manager.send_to_session(
                 str(session.id),
-                str(user.id),
                 {
+                    "type": "message",
                     "id": str(msg.id),
                     "session_id": str(session.id),
                     "sender_id": str(user.id),
                     "content": content,
                     "sent_at": msg.sent_at.isoformat(),
+                    "client_id": client_id,
                 },
             )
     except WebSocketDisconnect:
-        connection_manager.disconnect(str(session.id), str(user.id))
+        connection_manager.disconnect(str(session.id), str(user.id), websocket)
+    except Exception:
+        connection_manager.disconnect(str(session.id), str(user.id), websocket)
 
 
 
@@ -118,8 +138,6 @@ async def patient_list_sessions(
     patient = await get_patient_by_user_id(db, current_user.id)
     if not patient:
         raise NotFoundException("Patient profile not found")
-    if not await has_active_subscription(db, patient.id):
-        raise ForbiddenException("Active subscription required to access chat")
 
     result = await db.execute(
         select(ChatSession)
@@ -141,8 +159,6 @@ async def patient_session_messages(
     patient = await get_patient_by_user_id(db, current_user.id)
     if not patient:
         raise NotFoundException("Patient profile not found")
-    if not await has_active_subscription(db, patient.id):
-        raise ForbiddenException("Active subscription required to access chat")
 
     result = await db.execute(
         select(ChatSession).where(ChatSession.id == session_id)

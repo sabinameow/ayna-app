@@ -16,12 +16,10 @@ from backend.app.services.ai_service import (
     generate_phase_insight,
 )
 from backend.app.services.notification_service import create_notification
-from backend.app.services.subscription_service import has_active_subscription
 
 
 async def _run_daily_insights() -> dict:
     created = 0
-    skipped_no_subscription = 0
     skipped_unknown_phase = 0
 
     async with AsyncSessionLocal() as db:  # type: AsyncSession
@@ -29,10 +27,6 @@ async def _run_daily_insights() -> dict:
         patients = list(patients_res.scalars().all())
 
         for patient in patients:
-            if not await has_active_subscription(db, patient.id):
-                skipped_no_subscription += 1
-                continue
-
             phase, cycle_day = await detect_current_phase(db, patient)
             if phase is CyclePhase.UNKNOWN:
                 skipped_unknown_phase += 1
@@ -51,7 +45,6 @@ async def _run_daily_insights() -> dict:
 
     return {
         "created": created,
-        "skipped_no_subscription": skipped_no_subscription,
         "skipped_unknown_phase": skipped_unknown_phase,
         "date": date.today().isoformat(),
     }
@@ -68,9 +61,6 @@ async def _run_for_single_patient(patient_id: uuid.UUID) -> dict:
         patient = result.scalar_one_or_none()
         if patient is None:
             return {"created": 0, "reason": "patient_not_found"}
-
-        if not await has_active_subscription(db, patient.id):
-            return {"created": 0, "reason": "no_active_subscription"}
 
         phase, cycle_day = await detect_current_phase(db, patient)
         if phase is CyclePhase.UNKNOWN:

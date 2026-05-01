@@ -33,6 +33,8 @@ class CyclePrediction(BaseModel):
     predicted_end_date: date
     predicted_ovulation_date: date
     average_cycle_length: int
+    average_period_length: int = 5
+    upcoming_starts: list[date] = []
 
 
 class PeriodRangeCreate(BaseModel):

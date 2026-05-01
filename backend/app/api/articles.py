@@ -6,8 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.auth.service import get_current_user
-from backend.app.core.constants import UserRole
-from backend.app.core.exceptions import ForbiddenException, NotFoundException
+from backend.app.core.exceptions import NotFoundException
 from backend.app.core.permissions import require_doctor_or_manager
 from backend.app.database import get_db
 from backend.app.models.article import Article
@@ -18,8 +17,6 @@ from backend.app.schemas.article import (
     ArticleOut,
     ArticleUpdate,
 )
-from backend.app.services.cycle_service import get_patient_by_user_id
-from backend.app.services.subscription_service import has_active_subscription
 
 router = APIRouter(prefix="/articles", tags=["Articles"])
 
@@ -48,19 +45,6 @@ async def get_article(
     article = result.scalar_one_or_none()
     if not article:
         raise NotFoundException("Article not found")
-
-    if current_user.role in (UserRole.DOCTOR, UserRole.MANAGER):
-        return article
-
-    if article.requires_subscription:
-        patient = await get_patient_by_user_id(db, current_user.id)
-        if not patient:
-            raise ForbiddenException("Active subscription required")
-        if not await has_active_subscription(db, patient.id):
-            raise ForbiddenException(
-                "Active subscription required to read this article"
-            )
-
     return article
 
 
