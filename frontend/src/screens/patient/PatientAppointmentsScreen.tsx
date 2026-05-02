@@ -12,6 +12,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import { useNotifications } from "@/hooks/useNotifications";
+import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
 import type { Appointment, AvailableSlot, DoctorProfile, Symptom } from "@/types/api";
 import { formatDate, formatTime } from "@/utils/format";
 
@@ -52,6 +53,7 @@ export function PatientAppointmentsScreen() {
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [booking, setBooking] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const bookingFeedback = useSaveFeedback();
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -109,6 +111,7 @@ export function PatientAppointmentsScreen() {
   async function book() {
     if (!accessToken || !selectedDoctor || !selectedSlotId || booking) return;
     setBooking(true);
+    bookingFeedback.markSaving();
     setError("");
     try {
       await api.createAppointment(accessToken, {
@@ -116,7 +119,7 @@ export function PatientAppointmentsScreen() {
         reason: reason || undefined,
         selected_symptom_ids: selectedSymptoms.length ? selectedSymptoms : undefined,
       });
-      showToast("Appointment booked successfully", "success");
+      bookingFeedback.markSaved();
       await Promise.all([load(), loadSlots(selectedDoctor.id, selectedDate), refreshUnread()]);
       setReason("");
       setSelectedSymptoms([]);
@@ -126,11 +129,7 @@ export function PatientAppointmentsScreen() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to book appointment";
       setError(message);
-      if (err instanceof api.error && err.status === 409) {
-        showToast("This slot is already booked", "error");
-      } else {
-        showToast("Failed to book appointment", "error");
-      }
+      bookingFeedback.markError();
     } finally {
       setBooking(false);
     }
@@ -399,10 +398,10 @@ export function PatientAppointmentsScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <PrimaryButton
-        label="Book Appointment"
+        label={saveFeedbackLabel(bookingFeedback.status, "Book Appointment", "Booked")}
         onPress={book}
         disabled={!selectedSlotId || booking}
-        loading={booking}
+        feedbackStatus={bookingFeedback.status}
       />
     </AppScreen>
   );

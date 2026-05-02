@@ -68,6 +68,16 @@ async def add_mood(
     if not patient:
         raise NotFoundException("Patient profile not found")
 
+    existing_result = await db.execute(
+        select(MoodEntry).where(
+            MoodEntry.patient_id == patient.id,
+            MoodEntry.date == body.date,
+        )
+    )
+    existing_entry = existing_result.scalar_one_or_none()
+    if existing_entry:
+        return existing_entry
+
     entry = MoodEntry(
         patient_id=patient.id,
         date=body.date,
@@ -94,8 +104,8 @@ async def add_mood(
 
 @router.get("/mood", response_model=list[MoodOut])
 async def list_mood(
-    from_date: date = Query(..., alias="from"),
-    to_date: date = Query(..., alias="to"),
+    from_date: date | None = Query(None, alias="from"),
+    to_date: date | None = Query(None, alias="to"),
     current_user: User = Depends(require_patient()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -103,15 +113,12 @@ async def list_mood(
     if not patient:
         raise NotFoundException("Patient profile not found")
 
-    result = await db.execute(
-        select(MoodEntry)
-        .where(
-            MoodEntry.patient_id == patient.id,
-            MoodEntry.date >= from_date,
-            MoodEntry.date <= to_date,
-        )
-        .order_by(MoodEntry.date)
-    )
+    query = select(MoodEntry).where(MoodEntry.patient_id == patient.id)
+    if from_date:
+        query = query.where(MoodEntry.date >= from_date)
+    if to_date:
+        query = query.where(MoodEntry.date <= to_date)
+    result = await db.execute(query.order_by(MoodEntry.date))
     return list(result.scalars().all())
 
 
@@ -195,6 +202,18 @@ async def log_medication(
     )
     if not result.scalar_one_or_none():
         raise NotFoundException("Medication not found")
+
+    existing_today = await db.execute(
+        select(MedicationLog).where(
+            MedicationLog.medication_id == medication_id,
+            MedicationLog.patient_id == patient.id,
+            MedicationLog.skipped.is_(False),
+            func.date(MedicationLog.taken_at) == date.today(),
+        )
+    )
+    existing_log = existing_today.scalar_one_or_none()
+    if existing_log and not body.skipped:
+        return existing_log
 
     log = MedicationLog(
         medication_id=medication_id,

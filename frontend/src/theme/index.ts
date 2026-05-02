@@ -12,7 +12,7 @@ export const palette = {
   manager: "#8AAF2B",
   managerSoft: "#EEF7D8",
   info: "#7C6CF3",
-  success: "#38A169",
+  success: "#5F8F72",
   warning: "#DD8A29",
   danger: "#E25555"
 };

@@ -15,7 +15,7 @@ type ToastContextValue = {
 const ToastContext = createContext<ToastContextValue | undefined>(undefined);
 
 const TOAST_COLORS: Record<ToastVariant, { bg: string; border: string }> = {
-  success: { bg: "#E8F7EE", border: "#38A169" },
+  success: { bg: "#F0F7F2", border: "#C7DDCE" },
   error: { bg: "#FFF4F4", border: "#E25555" },
   info: { bg: "#F3EEFF", border: "#7C6CF3" },
 };

@@ -9,6 +9,7 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
 import type { DoctorAvailabilitySlot } from "@/types/api";
 
 type EditableDay = {
@@ -143,6 +144,7 @@ export function DoctorScheduleScreen() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const saveFeedback = useSaveFeedback();
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -184,6 +186,7 @@ export function DoctorScheduleScreen() {
   async function saveSchedule() {
     if (!accessToken || saving) return;
     setSaving(true);
+    saveFeedback.markSaving();
     setError("");
     try {
       for (const day of days) {
@@ -222,11 +225,11 @@ export function DoctorScheduleScreen() {
       }
 
       await load();
-      showToast("Saved successfully", "success");
+      saveFeedback.markSaved();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save schedule";
       setError(message);
-      showToast("Something went wrong", "error");
+      saveFeedback.markError();
     } finally {
       setSaving(false);
     }
@@ -321,10 +324,10 @@ export function DoctorScheduleScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <PrimaryButton
-        label={saving ? "Saving..." : "Save schedule"}
+        label={saveFeedbackLabel(saveFeedback.status, "Save schedule")}
         onPress={saveSchedule}
         disabled={saving}
-        loading={saving}
+        feedbackStatus={saveFeedback.status}
         style={styles.saveButton}
       />
     </AppScreen>

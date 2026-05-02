@@ -16,6 +16,7 @@ import { GlassCard } from "@/components/GlassCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
 import type {
   Cycle,
   Medication,
@@ -214,6 +215,8 @@ export function DoctorPatientsScreen() {
   const [frequency, setFrequency] = useState("");
   const [duration, setDuration] = useState("");
   const [instructions, setInstructions] = useState("");
+  const prescribeFeedback = useSaveFeedback();
+  const recommendationFeedback = useSaveFeedback();
 
   const loadPatients = useCallback(() => {
     if (!accessToken) return;
@@ -242,31 +245,43 @@ export function DoctorPatientsScreen() {
 
   async function addRecommendation() {
     if (!accessToken || !selected || !recText.trim()) return;
-    await api.createDoctorRecommendation(accessToken, selected.id, recText.trim());
-    setRecText("");
-    setRecPriority("");
-    const next = await api.doctorPatientRecommendations(accessToken, selected.id);
-    setRecommendations(next);
+    recommendationFeedback.markSaving();
+    try {
+      await api.createDoctorRecommendation(accessToken, selected.id, recText.trim());
+      setRecText("");
+      setRecPriority("");
+      const next = await api.doctorPatientRecommendations(accessToken, selected.id);
+      setRecommendations(next);
+      recommendationFeedback.markSaved();
+    } catch {
+      recommendationFeedback.markError();
+    }
   }
 
   async function prescribe() {
     if (!accessToken || !selected || !medName || !dosage || !frequency) return;
-    await api.prescribeMedication(accessToken, selected.id, {
-      patient_id: selected.id,
-      name: medName,
-      dosage,
-      frequency,
-      start_date: new Date().toISOString().slice(0, 10),
-      end_date: duration || undefined,
-      instructions: instructions || undefined,
-    });
-    setMedName("");
-    setDosage("");
-    setFrequency("");
-    setDuration("");
-    setInstructions("");
-    const next = await api.doctorPatientMedications(accessToken, selected.id);
-    setMedications(next);
+    prescribeFeedback.markSaving();
+    try {
+      await api.prescribeMedication(accessToken, selected.id, {
+        patient_id: selected.id,
+        name: medName,
+        dosage,
+        frequency,
+        start_date: new Date().toISOString().slice(0, 10),
+        end_date: duration || undefined,
+        instructions: instructions || undefined,
+      });
+      setMedName("");
+      setDosage("");
+      setFrequency("");
+      setDuration("");
+      setInstructions("");
+      const next = await api.doctorPatientMedications(accessToken, selected.id);
+      setMedications(next);
+      prescribeFeedback.markSaved();
+    } catch {
+      prescribeFeedback.markError();
+    }
   }
 
   const filteredPatients = useMemo(() => {
@@ -475,9 +490,10 @@ export function DoctorPatientsScreen() {
                 onChangeText={setInstructions}
               />
               <PrimaryButton
-                label="Prescribe medication"
+                label={saveFeedbackLabel(prescribeFeedback.status, "Prescribe medication", "Prescribed")}
                 onPress={prescribe}
-                disabled={!medName || !dosage || !frequency}
+                disabled={!medName || !dosage || !frequency || prescribeFeedback.status === "saving"}
+                feedbackStatus={prescribeFeedback.status}
                 style={{ backgroundColor: "#3F6CF6" }}
               />
             </GlassCard>
@@ -515,9 +531,10 @@ export function DoctorPatientsScreen() {
                 onChangeText={setRecPriority}
               />
               <PrimaryButton
-                label="Add recommendation"
+                label={saveFeedbackLabel(recommendationFeedback.status, "Add recommendation", "Added")}
                 onPress={addRecommendation}
-                disabled={!recText.trim()}
+                disabled={!recText.trim() || recommendationFeedback.status === "saving"}
+                feedbackStatus={recommendationFeedback.status}
                 style={{ backgroundColor: "#3F6CF6" }}
               />
             </GlassCard>

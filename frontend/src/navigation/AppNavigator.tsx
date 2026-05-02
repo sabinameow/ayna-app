@@ -18,6 +18,8 @@ import { ManagerDashboardScreen } from "@/screens/manager/ManagerDashboardScreen
 import { ManagerProfileScreen } from "@/screens/manager/ManagerProfileScreen";
 import { ManagerSchedulesScreen } from "@/screens/manager/ManagerSchedulesScreen";
 import { NotificationsScreen } from "@/screens/NotificationsScreen";
+import { MedicationDetailScreen } from "@/screens/patient/MedicationDetailScreen";
+import { MedicationListScreen } from "@/screens/patient/MedicationListScreen";
 import { ArticleScreen } from "@/screens/patient/ArticleScreen";
 import { PatientAppointmentsScreen } from "@/screens/patient/PatientAppointmentsScreen";
 import { PatientReportScreen } from "@/screens/patient/PatientReportScreen";
@@ -142,6 +144,8 @@ export function AppNavigator() {
           <Stack.Screen name="PatientTabs" component={PatientTabs} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} />
           <Stack.Screen name="Article" component={ArticleScreen} />
+          <Stack.Screen name="Medications" component={MedicationListScreen} />
+          <Stack.Screen name="MedicationDetail" component={MedicationDetailScreen} />
           <Stack.Screen name="PatientReport" component={PatientReportScreen} />
         </>
       ) : user.role === "doctor" ? (

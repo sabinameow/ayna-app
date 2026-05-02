@@ -180,8 +180,15 @@ export const api = {
       token,
       body: payload,
     }),
-  listMoodEntries: (token: string) =>
-    request<MoodEntry[]>("/api/v1/patient/mood", { token }),
+  listMoodEntries: (token: string, from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return request<MoodEntry[]>(
+      `/api/v1/patient/mood${params.toString() ? `?${params}` : ""}`,
+      { token }
+    );
+  },
   createMoodEntry: (
     token: string,
     payload: {
@@ -198,7 +205,15 @@ export const api = {
       token,
       body: payload,
     }),
-  moodStats: (token: string) => request<MoodStats>("/api/v1/patient/mood/stats", { token }),
+  moodStats: (token: string, from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return request<MoodStats>(
+      `/api/v1/patient/mood/stats${params.toString() ? `?${params}` : ""}`,
+      { token }
+    );
+  },
   patientMedications: (token: string) =>
     request<Medication[]>("/api/v1/patient/medications", { token }),
   medicationLogs: (token: string, medicationId: string) =>

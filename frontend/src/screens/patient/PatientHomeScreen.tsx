@@ -59,7 +59,7 @@ export function PatientHomeScreen() {
     if (key === "doctors" || key === "appts") {
       navigation.navigate("PatientAppointments");
     } else if (key === "meds") {
-      navigation.navigate("PatientCycle");
+      navigation.navigate("Medications");
     }
   }
 

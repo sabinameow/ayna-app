@@ -6,7 +6,6 @@ import { api } from "@/api/client";
 import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
 import { useAuth } from "@/context/AuthContext";
-import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import type { Appointment, AppointmentStatus } from "@/types/api";
 import { formatDate } from "@/utils/format";
@@ -44,7 +43,6 @@ function apptTime(scheduledAt: string) {
 
 export function DoctorAppointmentsScreen() {
   const { accessToken } = useAuth();
-  const { showToast } = useToast();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [activeTab, setActiveTab] = useState<TabFilter>("all");
   const [loading, setLoading] = useState(false);
@@ -72,11 +70,9 @@ export function DoctorAppointmentsScreen() {
     setError("");
     try {
       await api.updateDoctorAppointmentStatus(accessToken, appointmentId, { status });
-      showToast("Saved successfully", "success");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update appointment");
-      showToast("Something went wrong", "error");
     } finally {
       setUpdatingId(null);
     }
@@ -261,11 +257,11 @@ const actionStyles = StyleSheet.create({
     borderRadius: 999,
   },
   primary: { backgroundColor: "#EAF0FF" },
-  success: { backgroundColor: "#E8F7EE" },
+  success: { backgroundColor: "#F0ECFF" },
   danger: { backgroundColor: "#FBE7E7" },
   label: { fontSize: 12, fontWeight: "700" },
   primaryText: { color: "#3356C4" },
-  successText: { color: "#2C8C5A" },
+  successText: { color: "#6D5BD0" },
   dangerText: { color: "#B44747" },
   disabled: { opacity: 0.6 },
 });

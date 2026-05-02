@@ -11,7 +11,20 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { useNotifications } from "@/hooks/useNotifications";
-import type { Cycle, CycleDay, MoodStats, Symptom } from "@/types/api";
+import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
+import {
+  listLocalMedicationLogsForDate,
+  saveLocalMedicationLogsForDate,
+} from "@/services/medicationLogStorage";
+import type {
+  Cycle,
+  CycleDay,
+  Medication,
+  MedicationLog,
+  MoodEntry,
+  MoodStats,
+  Symptom,
+} from "@/types/api";
 
 const PERIOD_COLOR = "#E53F8F";
 const PERIOD_LIGHT = "#F8B6CF";
@@ -24,12 +37,39 @@ const PREDICTION_HORIZON = 6;
 const MIN_CYCLE_GAP_DAYS = 18;
 
 const moods = ["great", "good", "okay", "bad", "terrible"] as const;
-const flowOptions: { key: "none" | "light" | "medium" | "heavy"; color: string }[] = [
-  { key: "none", color: "#F0DCE7" },
-  { key: "light", color: PERIOD_LIGHT },
-  { key: "medium", color: PERIOD_COLOR },
-  { key: "heavy", color: PERIOD_DARK },
-];
+const moodLabels: Record<(typeof moods)[number], string> = {
+  great: "Great",
+  good: "Good",
+  okay: "Okay",
+  bad: "Bad",
+  terrible: "Terrible",
+};
+
+type MedicationInput = {
+  id: string;
+  name: string;
+  taken: boolean;
+  locked: boolean;
+};
+
+function createMedicationInput(): MedicationInput {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: "",
+    taken: false,
+    locked: false,
+  };
+}
+
+function medicationInputsFromNames(names: string[]): MedicationInput[] {
+  const inputs = names.slice(0, 5).map((name) => ({
+    id: `${Date.now()}-${name}-${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    taken: true,
+    locked: true,
+  }));
+  return inputs.length ? inputs : [createMedicationInput()];
+}
 
 function getCyclePhase(dayOfCycle: number, cycleLength: number) {
   if (dayOfCycle <= 5) return { name: "Menstrual Phase", color: PERIOD_COLOR };
@@ -73,6 +113,20 @@ function buildDateRange(startDate: string, duration: number): string[] {
   return Array.from({ length: duration }, (_, index) => addDays(startDate, index));
 }
 
+function medicationLogDate(log: MedicationLog) {
+  return log.taken_at.slice(0, 10);
+}
+
+function last7DaysRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 6);
+  return {
+    from: start.toISOString().slice(0, 10),
+    to: end.toISOString().slice(0, 10),
+  };
+}
+
 export function PatientCycleScreen() {
   const { accessToken } = useAuth();
   const { showToast } = useToast();
@@ -81,15 +135,22 @@ export function PatientCycleScreen() {
   const [cycleDays, setCycleDays] = useState<CycleDay[]>([]);
   const [catalog, setCatalog] = useState<Symptom[]>([]);
   const [moodStats, setMoodStats] = useState<MoodStats | null>(null);
+  const [prescribedMedications, setPrescribedMedications] = useState<Medication[]>([]);
+  const [prescribedMedicationLogs, setPrescribedMedicationLogs] = useState<MedicationLog[]>([]);
+  const [selectedPrescriptionIds, setSelectedPrescriptionIds] = useState<string[]>([]);
+  const [savingPrescriptionIds, setSavingPrescriptionIds] = useState<string[]>([]);
   const [tab, setTab] = useState<"overview" | "log" | "mood">("overview");
-  const [selectedFlow, setSelectedFlow] = useState<"none" | "light" | "medium" | "heavy">("none");
-  const [cycleNotes, setCycleNotes] = useState("");
+  const [medicationInputs, setMedicationInputs] = useState<MedicationInput[]>([
+    createMedicationInput(),
+  ]);
   const [selectedSymptom, setSelectedSymptom] = useState<string | null>(null);
   const [severity, setSeverity] = useState(3);
   const [selectedMood, setSelectedMood] = useState<(typeof moods)[number]>("good");
   const [energy, setEnergy] = useState(3);
   const [stress, setStress] = useState(3);
   const [sleep, setSleep] = useState(3);
+  const [moodNotes, setMoodNotes] = useState("");
+  const [todayMoodEntry, setTodayMoodEntry] = useState<MoodEntry | null>(null);
   const [error, setError] = useState("");
   const [calMonth, setCalMonth] = useState(() => {
     const d = new Date();
@@ -103,6 +164,10 @@ export function PatientCycleScreen() {
   } | null>(null);
   const [pendingDates, setPendingDates] = useState<string[]>([]);
   const [isPeriodMutating, setIsPeriodMutating] = useState(false);
+  const prescriptionSave = useSaveFeedback();
+  const otherMedicationSave = useSaveFeedback();
+  const symptomSave = useSaveFeedback();
+  const moodSave = useSaveFeedback();
 
   // Monotonically-increasing token. Every mutation increments it; any async
   // continuation that finds the token has moved on bails out — this is what
@@ -113,17 +178,52 @@ export function PatientCycleScreen() {
     if (!accessToken) return;
     const seq = ++seqRef.current;
     try {
-      const [allCycles, monthDays, nextCatalog, nextMoodStats] = await Promise.all([
+      const today = new Date().toISOString().slice(0, 10);
+      const moodRange = last7DaysRange();
+      const [
+        allCycles,
+        monthDays,
+        nextCatalog,
+        nextMoodStats,
+        todayMoodEntries,
+        todayMedicationLogs,
+        medications,
+      ] = await Promise.all([
         api.listCycles(accessToken),
         api.listCycleDays(accessToken, calMonth.month + 1, calMonth.year),
         api.listSymptomsCatalog(accessToken),
-        api.moodStats(accessToken).catch(() => null),
+        api.moodStats(accessToken, moodRange.from, moodRange.to).catch(() => null),
+        api.listMoodEntries(accessToken, today, today).catch(() => [] as MoodEntry[]),
+        listLocalMedicationLogsForDate(today).catch(() => []),
+        api.patientMedications(accessToken).catch(() => [] as Medication[]),
       ]);
+      const activeMedications = medications.filter((medication) => medication.is_active);
+      const medicationLogs = (
+        await Promise.all(
+          activeMedications.map((medication) =>
+            api.medicationLogs(accessToken, medication.id).catch(() => [] as MedicationLog[])
+          )
+        )
+      ).flat();
       if (seq !== seqRef.current) return;
       setCycles(allCycles.filter((c) => !c.is_predicted));
       setCycleDays(monthDays);
       setCatalog(nextCatalog.slice(0, 10));
       setMoodStats(nextMoodStats);
+      const savedMood = todayMoodEntries[0] ?? null;
+      setTodayMoodEntry(savedMood);
+      if (savedMood) {
+        setSelectedMood(savedMood.mood);
+        setEnergy(savedMood.energy_level);
+        setStress(savedMood.stress_level);
+        setSleep(savedMood.sleep_quality);
+        setMoodNotes(savedMood.notes ?? "");
+      }
+      setPrescribedMedications(activeMedications);
+      setPrescribedMedicationLogs(medicationLogs);
+      setSelectedPrescriptionIds([]);
+      setSavingPrescriptionIds([]);
+      setMedicationInputs(medicationInputsFromNames(todayMedicationLogs.map((log) => log.name)));
       setError("");
     } catch (err) {
       if (seq !== seqRef.current) return;
@@ -391,25 +491,101 @@ export function PatientCycleScreen() {
     });
   }
 
-  async function logCycleDay() {
-    if (!accessToken) return;
+  function updateMedicationInput(id: string, patch: Partial<MedicationInput>) {
+    setMedicationInputs((prev) =>
+      prev.map((item) => (item.id === id && !item.locked ? { ...item, ...patch } : item))
+    );
+  }
+
+  function addMedicationInput() {
+    setMedicationInputs((prev) =>
+      prev.length >= 5 ? prev : [...prev, createMedicationInput()]
+    );
+  }
+
+  function removeMedicationInput(id: string) {
+    setMedicationInputs((prev) =>
+      prev.length <= 1 ? prev : prev.filter((item) => item.id !== id || item.locked)
+    );
+  }
+
+  async function saveMedicationIntake() {
+    const lockedNames = medicationInputs
+      .filter((item) => item.locked && item.taken)
+      .map((item) => item.name.trim())
+      .filter(Boolean);
+    const draftNames = medicationInputs
+      .filter((item) => !item.locked && item.taken)
+      .map((item) => item.name.trim())
+      .filter(Boolean);
+    const uniqueNames = Array.from(
+      new Map([...lockedNames, ...draftNames].map((name) => [name.toLowerCase(), name])).values()
+    ).slice(0, 5);
+
+    if (!draftNames.length) {
+      setError("Mark at least one medication as taken and enter its name.");
+      otherMedicationSave.markError();
+      return;
+    }
+
+    otherMedicationSave.markSaving();
     try {
-      await api.createCycleDay(accessToken, {
-        date: new Date().toISOString().slice(0, 10),
-        flow_intensity: selectedFlow,
-        notes: cycleNotes || undefined,
-      });
-      setCycleNotes("");
-      showToast("Saved successfully", "success");
-      await Promise.all([load(), refreshUnread()]);
+      await saveLocalMedicationLogsForDate(new Date().toISOString().slice(0, 10), uniqueNames);
+      setMedicationInputs(medicationInputsFromNames(uniqueNames));
+      setError("");
+      otherMedicationSave.markSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save cycle log");
-      showToast("Something went wrong", "error");
+      setError(err instanceof Error ? err.message : "Failed to save medication intake");
+      otherMedicationSave.markError();
+    }
+  }
+
+  function hasPrescriptionLogToday(medicationId: string) {
+    return prescribedMedicationLogs.some(
+      (log) => log.medication_id === medicationId && !log.skipped && medicationLogDate(log) === todayKey
+    );
+  }
+
+  function togglePrescription(medicationId: string) {
+    if (hasPrescriptionLogToday(medicationId) || savingPrescriptionIds.includes(medicationId)) return;
+    setSelectedPrescriptionIds((prev) =>
+      prev.includes(medicationId)
+        ? prev.filter((id) => id !== medicationId)
+        : [...prev, medicationId]
+    );
+  }
+
+  async function savePrescriptionIntake() {
+    if (!accessToken) return;
+    const idsToSave = selectedPrescriptionIds.filter((id) => !hasPrescriptionLogToday(id));
+    if (!idsToSave.length) {
+      setError("Select prescribed medication to save.");
+      prescriptionSave.markError();
+      return;
+    }
+
+    prescriptionSave.markSaving();
+    setSavingPrescriptionIds(idsToSave);
+    try {
+      const saved = await Promise.all(
+        idsToSave.map((medicationId) => api.logMedication(accessToken, medicationId, { skipped: false }))
+      );
+      setPrescribedMedicationLogs((prev) => [...saved, ...prev]);
+      setSelectedPrescriptionIds((prev) => prev.filter((id) => !idsToSave.includes(id)));
+      setError("");
+      prescriptionSave.markSaved();
+      await refreshUnread();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save prescribed medication intake");
+      prescriptionSave.markError();
+    } finally {
+      setSavingPrescriptionIds([]);
     }
   }
 
   async function logSymptom() {
     if (!accessToken || !selectedSymptom) return;
+    symptomSave.markSaving();
     try {
       await api.createPatientSymptom(accessToken, {
         symptom_id: selectedSymptom,
@@ -417,29 +593,37 @@ export function PatientCycleScreen() {
         severity,
       });
       setSelectedSymptom(null);
-      showToast("Saved successfully", "success");
+      symptomSave.markSaved();
       await Promise.all([load(), refreshUnread()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save symptom");
-      showToast("Something went wrong", "error");
+      symptomSave.markError();
     }
   }
 
   async function logMood() {
-    if (!accessToken) return;
+    if (!accessToken || todayMoodEntry) return;
+    moodSave.markSaving();
     try {
-      await api.createMoodEntry(accessToken, {
+      const savedMood = await api.createMoodEntry(accessToken, {
         date: new Date().toISOString().slice(0, 10),
         mood: selectedMood,
         energy_level: energy,
         stress_level: stress,
         sleep_quality: sleep,
+        notes: moodNotes.trim() || undefined,
       });
-      showToast("Saved successfully", "success");
+      setTodayMoodEntry(savedMood);
+      setSelectedMood(savedMood.mood);
+      setEnergy(savedMood.energy_level);
+      setStress(savedMood.stress_level);
+      setSleep(savedMood.sleep_quality);
+      setMoodNotes(savedMood.notes ?? "");
+      moodSave.markSaved();
       await Promise.all([load(), refreshUnread()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save mood");
-      showToast("Something went wrong", "error");
+      moodSave.markError();
     }
   }
 
@@ -470,6 +654,12 @@ export function PatientCycleScreen() {
   });
   const moodDist = moodStats?.mood_distribution ?? {};
   const moodMax = Math.max(1, ...Object.values(moodDist));
+  const medicationTakenCount = new Set(
+    medicationInputs
+      .filter((item) => item.taken && item.name.trim())
+      .map((item) => item.name.trim().toLowerCase())
+  ).size;
+  const hasDraftMedicationInput = medicationInputs.some((item) => !item.locked);
 
   return (
     <View style={{ flex: 1 }}>
@@ -642,31 +832,150 @@ export function PatientCycleScreen() {
         {tab === "log" && (
           <>
             <GlassCard>
-              <Text style={styles.cardTitle}>Log today's flow</Text>
-              <View style={styles.flowRow}>
-                {flowOptions.map((f) => (
-                  <Pressable
-                    key={f.key}
-                    onPress={() => setSelectedFlow(f.key)}
-                    style={[
-                      styles.flowDot,
-                      { borderColor: f.color },
-                      selectedFlow === f.key && { backgroundColor: f.color },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.flowText,
-                        selectedFlow === f.key && styles.flowTextActive,
-                      ]}
+              <View style={styles.medicationHeader}>
+                <View>
+                  <Text style={styles.cardTitle}>Prescribed medications</Text>
+                  <Text style={styles.medicationHint}>Mark today's dose once. Saved doses are locked.</Text>
+                </View>
+                <Text style={styles.medicationCounter}>
+                  {prescribedMedications.filter((item) => hasPrescriptionLogToday(item.id)).length}/
+                  {prescribedMedications.length}
+                </Text>
+              </View>
+
+              {prescribedMedications.length ? (
+                <View style={styles.prescriptionList}>
+                  {prescribedMedications.map((medication) => {
+                    const saved = hasPrescriptionLogToday(medication.id);
+                    const selected = selectedPrescriptionIds.includes(medication.id);
+                    const saving = savingPrescriptionIds.includes(medication.id);
+                    return (
+                      <Pressable
+                        key={medication.id}
+                        style={[styles.prescriptionRow, saved && styles.prescriptionRowSaved]}
+                        onPress={() => togglePrescription(medication.id)}
+                        disabled={saved || saving}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: saved || selected, disabled: saved || saving }}
+                      >
+                        <View
+                          style={[
+                            styles.checkBox,
+                            styles.prescriptionCheckBox,
+                            (saved || selected) && styles.checkBoxActive,
+                          ]}
+                        >
+                          {saving ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : saved || selected ? (
+                            <Feather name="check" size={14} color="#FFFFFF" />
+                          ) : null}
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.prescriptionName}>{medication.name}</Text>
+                          <Text style={styles.prescriptionMeta}>
+                            {medication.dosage} · {medication.frequency}
+                          </Text>
+                          {medication.instructions ? (
+                            <Text style={styles.prescriptionInstructions}>
+                              {medication.instructions}
+                            </Text>
+                          ) : null}
+                        </View>
+                        {saved ? (
+                          <View style={styles.savedPill}>
+                            <Text style={styles.savedPillText}>Saved</Text>
+                          </View>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
+                  <PrimaryButton
+                    label={saveFeedbackLabel(prescriptionSave.status, "Save prescribed intake")}
+                    onPress={savePrescriptionIntake}
+                    disabled={!selectedPrescriptionIds.length || prescriptionSave.status === "saving"}
+                    feedbackStatus={prescriptionSave.status}
+                  />
+                </View>
+              ) : (
+                <Text style={styles.emptyText}>No active prescribed medications yet.</Text>
+              )}
+            </GlassCard>
+
+            <GlassCard>
+              <View style={styles.medicationHeader}>
+                <View>
+                  <Text style={styles.cardTitle}>Other medication</Text>
+                  <Text style={styles.medicationHint}>Use this only for non-prescribed intake.</Text>
+                </View>
+                <Text style={styles.medicationCounter}>{medicationTakenCount}/5 saved</Text>
+              </View>
+
+              <View style={styles.medicationList}>
+                {medicationInputs.map((item, index) => (
+                  <View key={item.id} style={[styles.medicationRow, item.locked && styles.medicationRowLocked]}>
+                    <Pressable
+                      style={[styles.checkBox, item.taken && styles.checkBoxActive]}
+                      onPress={() => updateMedicationInput(item.id, { taken: !item.taken })}
+                      disabled={item.locked}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: item.taken, disabled: item.locked }}
                     >
-                      {f.key}
-                    </Text>
-                  </Pressable>
+                      {item.taken ? <Feather name="check" size={14} color="#FFFFFF" /> : null}
+                    </Pressable>
+                    <View style={styles.medicationInputWrap}>
+                      <AppInput
+                        label={index === 0 ? "Medication name" : undefined}
+                        value={item.name}
+                        onChangeText={(name) => updateMedicationInput(item.id, { name })}
+                        placeholder="e.g. Folic Acid"
+                        editable={!item.locked}
+                      />
+                    </View>
+                    {item.locked ? (
+                      <View style={styles.savedPill}>
+                        <Text style={styles.savedPillText}>Saved</Text>
+                      </View>
+                    ) : null}
+                    {medicationInputs.length > 1 ? (
+                      <Pressable
+                        style={[
+                          styles.removeMedicationBtn,
+                          item.locked && styles.removeMedicationBtnDisabled,
+                        ]}
+                        onPress={() => removeMedicationInput(item.id)}
+                        disabled={item.locked}
+                        accessibilityRole="button"
+                        accessibilityLabel="Remove medication"
+                      >
+                        <Feather name="x" size={16} color="#E25555" />
+                      </Pressable>
+                    ) : null}
+                  </View>
                 ))}
               </View>
-              <AppInput label="Notes" value={cycleNotes} onChangeText={setCycleNotes} />
-              <PrimaryButton label="Save cycle log" onPress={logCycleDay} />
+
+              <View style={styles.medicationActions}>
+                <Pressable
+                  style={[
+                    styles.addMedicationBtn,
+                    medicationInputs.length >= 5 && styles.addMedicationBtnDisabled,
+                  ]}
+                  onPress={addMedicationInput}
+                  disabled={medicationInputs.length >= 5}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add medication"
+                >
+                  <Feather name="plus" size={18} color={PERIOD_COLOR} />
+                  <Text style={styles.addMedicationText}>Add</Text>
+                </Pressable>
+                <PrimaryButton
+                  label={saveFeedbackLabel(otherMedicationSave.status, "Save medication log")}
+                  onPress={saveMedicationIntake}
+                  disabled={!hasDraftMedicationInput || otherMedicationSave.status === "saving"}
+                  feedbackStatus={otherMedicationSave.status}
+                />
+              </View>
             </GlassCard>
 
             <GlassCard>
@@ -699,7 +1008,12 @@ export function PatientCycleScreen() {
                   />
                 ))}
               </View>
-              <PrimaryButton label="Save symptom" onPress={logSymptom} disabled={!selectedSymptom} />
+              <PrimaryButton
+                label={saveFeedbackLabel(symptomSave.status, "Save symptom")}
+                onPress={logSymptom}
+                disabled={!selectedSymptom || symptomSave.status === "saving"}
+                feedbackStatus={symptomSave.status}
+              />
             </GlassCard>
           </>
         )}
@@ -707,7 +1021,10 @@ export function PatientCycleScreen() {
         {tab === "mood" && (
           <>
             <GlassCard>
-              <Text style={styles.cardTitle}>Mood Report</Text>
+              <View>
+                <Text style={styles.cardTitle}>Mood Report</Text>
+                <Text style={styles.reportRangeText}>Last 7 days</Text>
+              </View>
               <View style={styles.moodChart}>
                 {moods.map((m) => {
                   const count = moodDist[m] || 0;
@@ -716,7 +1033,7 @@ export function PatientCycleScreen() {
                       <View style={styles.barTrack}>
                         <View style={[styles.barFill, { height: `${(count / moodMax) * 100}%` }]} />
                       </View>
-                      <Text style={styles.barLabel}>{m.slice(0, 3)}</Text>
+                      <Text style={styles.barLabel}>{moodLabels[m]}</Text>
                       <Text style={styles.barValue}>{count}</Text>
                     </View>
                   );
@@ -737,18 +1054,31 @@ export function PatientCycleScreen() {
             </GlassCard>
 
             <GlassCard>
-              <Text style={styles.cardTitle}>How are you feeling?</Text>
+              <View style={styles.moodHeader}>
+                <View>
+                  <Text style={styles.cardTitle}>How are you feeling?</Text>
+                  {todayMoodEntry ? (
+                    <Text style={styles.moodSavedHint}>Today's check-in is saved and locked.</Text>
+                  ) : null}
+                </View>
+                {todayMoodEntry ? (
+                  <View style={styles.savedPill}>
+                    <Text style={styles.savedPillText}>Saved today</Text>
+                  </View>
+                ) : null}
+              </View>
               <View style={styles.chipRow}>
                 {moods.map((m) => (
                   <Pressable
                     key={m}
                     onPress={() => setSelectedMood(m)}
+                    disabled={!!todayMoodEntry}
                     style={[styles.chip, selectedMood === m && styles.chipActive]}
                   >
                     <Text
                       style={[styles.chipText, selectedMood === m && styles.chipTextActive]}
                     >
-                      {m}
+                      {moodLabels[m]}
                     </Text>
                   </Pressable>
                 ))}
@@ -765,13 +1095,40 @@ export function PatientCycleScreen() {
                       <Pressable
                         key={s}
                         onPress={() => set(s)}
+                        disabled={!!todayMoodEntry}
                         style={[styles.sevDot, val >= s && styles.sevDotActive]}
                       />
                     ))}
                   </View>
                 </React.Fragment>
               ))}
-              <PrimaryButton label="Save mood" onPress={logMood} />
+              <AppInput
+                label="Notes (optional)"
+                value={moodNotes}
+                onChangeText={setMoodNotes}
+                placeholder="Add anything your doctor should know"
+                editable={!todayMoodEntry}
+                multiline
+                style={styles.moodNotesInput}
+              />
+              {todayMoodEntry ? (
+                <View style={styles.todayMoodCard}>
+                  <Text style={styles.todayMoodTitle}>Today's entry</Text>
+                  <Text style={styles.todayMoodLine}>
+                    Mood: {todayMoodEntry.mood} · Energy {todayMoodEntry.energy_level} · Stress{" "}
+                    {todayMoodEntry.stress_level} · Sleep {todayMoodEntry.sleep_quality}
+                  </Text>
+                  {todayMoodEntry.notes ? (
+                    <Text style={styles.todayMoodNotes}>{todayMoodEntry.notes}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+              <PrimaryButton
+                label={saveFeedbackLabel(moodSave.status, "Save mood")}
+                onPress={logMood}
+                disabled={!!todayMoodEntry || moodSave.status === "saving"}
+                feedbackStatus={moodSave.status}
+              />
             </GlassCard>
           </>
         )}
@@ -863,6 +1220,80 @@ const styles = StyleSheet.create({
   flowDot: { flex: 1, paddingVertical: 14, borderRadius: 14, borderWidth: 2, alignItems: "center" },
   flowText: { fontSize: 12, fontWeight: "700", color: "#231F29", textTransform: "capitalize" },
   flowTextActive: { color: "#FFFFFF" },
+  medicationHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+  },
+  medicationHint: { fontSize: 12, color: "#7F7486", marginTop: -6 },
+  medicationCounter: { fontSize: 12, color: PERIOD_COLOR, fontWeight: "800" },
+  prescriptionList: { gap: 10 },
+  prescriptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#F0DCE7",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+  },
+  prescriptionRowSaved: { backgroundColor: "#F0F7F2", borderColor: "#C7DDCE" },
+  prescriptionCheckBox: { marginTop: 0 },
+  prescriptionName: { fontSize: 14, fontWeight: "800", color: "#231F29" },
+  prescriptionMeta: { fontSize: 12, color: "#7F7486", marginTop: 2 },
+  prescriptionInstructions: { fontSize: 12, color: "#4A4351", marginTop: 4, lineHeight: 17 },
+  savedPill: {
+    borderRadius: 999,
+    backgroundColor: "#F0F7F2",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  savedPillText: { fontSize: 11, color: "#5F8F72", fontWeight: "900" },
+  emptyText: { color: "#7F7486", fontSize: 13 },
+  medicationList: { gap: 10 },
+  medicationRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  checkBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: "#F0DCE7",
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 20,
+  },
+  checkBoxActive: { backgroundColor: PERIOD_COLOR, borderColor: PERIOD_COLOR },
+  medicationInputWrap: { flex: 1 },
+  removeMedicationBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#FFF4F4",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 20,
+  },
+  removeMedicationBtnDisabled: { opacity: 0.35 },
+  medicationRowLocked: { opacity: 0.95 },
+  medicationActions: { gap: 12, marginTop: 12 },
+  addMedicationBtn: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: "#F0DCE7",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  addMedicationBtnDisabled: { opacity: 0.5 },
+  addMedicationText: { color: PERIOD_COLOR, fontSize: 13, fontWeight: "800" },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
   chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: "#FFF6FA", borderWidth: 1, borderColor: "#F0DCE7" },
   chipActive: { backgroundColor: PERIOD_COLOR, borderColor: PERIOD_COLOR },
@@ -875,12 +1306,33 @@ const styles = StyleSheet.create({
   barWrap: { alignItems: "center", gap: 4, flex: 1 },
   barTrack: { width: 22, height: 100, backgroundColor: PERIOD_BG, borderRadius: 11, justifyContent: "flex-end", overflow: "hidden" },
   barFill: { width: "100%", backgroundColor: PERIOD_COLOR, borderRadius: 11 },
-  barLabel: { fontSize: 10, color: "#7F7486", textTransform: "capitalize" },
+  barLabel: { fontSize: 10, color: "#7F7486", textAlign: "center" },
   barValue: { fontSize: 10, color: "#231F29", fontWeight: "700" },
+  reportRangeText: { fontSize: 12, color: "#7F7486", fontWeight: "700", marginTop: -6, marginBottom: 4 },
   miniStatRow: { flexDirection: "row", gap: 8 },
   miniStat: { flex: 1, backgroundColor: "#FFF6FA", padding: 10, borderRadius: 12, alignItems: "center" },
   miniStatLabel: { fontSize: 11, color: "#7F7486" },
   miniStatValue: { fontSize: 16, fontWeight: "800", color: PERIOD_COLOR, marginTop: 2 },
+  moodHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+  },
+  moodSavedHint: { color: "#7F7486", fontSize: 12, marginTop: -6 },
+  moodNotesInput: { minHeight: 84, textAlignVertical: "top", paddingTop: 14 },
+  todayMoodCard: {
+    borderRadius: 14,
+    backgroundColor: "#F0F7F2",
+    borderWidth: 1,
+    borderColor: "#C7DDCE",
+    padding: 12,
+    gap: 4,
+  },
+  todayMoodTitle: { color: "#5F8F72", fontSize: 12, fontWeight: "900" },
+  todayMoodLine: { color: "#231F29", fontSize: 13, fontWeight: "700", textTransform: "capitalize" },
+  todayMoodNotes: { color: "#4A4351", fontSize: 12, lineHeight: 18 },
   error: { color: "#E25555" },
   inlineErrorBox: {
     marginTop: 12,

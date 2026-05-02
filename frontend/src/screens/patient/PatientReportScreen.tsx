@@ -17,6 +17,10 @@ import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import {
+  listLocalMedicationLogs,
+  type LocalMedicationLog,
+} from "@/services/medicationLogStorage";
 import { palette } from "@/theme";
 import type {
   Cycle,
@@ -24,6 +28,8 @@ import type {
   CyclePrediction,
   MoodEntry,
   MoodStats,
+  Medication,
+  MedicationLog,
   PatientProfile,
   PatientSymptom,
   ProgressSummary,
@@ -44,6 +50,10 @@ function daysBetween(a: string, b: string) {
   return Math.max(1, Math.round(ms / 86_400_000));
 }
 
+function medicationLogDate(log: MedicationLog) {
+  return log.taken_at.slice(0, 10);
+}
+
 export function PatientReportScreen() {
   const navigation = useNavigation<any>();
   const { accessToken } = useAuth();
@@ -57,6 +67,7 @@ export function PatientReportScreen() {
   const [moodStats, setMoodStats] = useState<MoodStats | null>(null);
   const [progress, setProgress] = useState<ProgressSummary | null>(null);
   const [cycleDays, setCycleDays] = useState<CycleDay[]>([]);
+  const [medicationLogs, setMedicationLogs] = useState<LocalMedicationLog[]>([]);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
@@ -73,6 +84,8 @@ export function PatientReportScreen() {
         nextMoodStats,
         nextProgress,
         nextCycleDays,
+        nextLocalMedicationLogs,
+        nextMedications,
       ] = await Promise.all([
         api.patientProfile(accessToken),
         api.cyclePrediction(accessToken).catch(() => null),
@@ -83,7 +96,29 @@ export function PatientReportScreen() {
         api.moodStats(accessToken).catch(() => null),
         api.patientProgress(accessToken).catch(() => null),
         api.listCycleDays(accessToken).catch(() => [] as CycleDay[]),
+        listLocalMedicationLogs().catch(() => [] as LocalMedicationLog[]),
+        api.patientMedications(accessToken).catch(() => [] as Medication[]),
       ]);
+      const activeMedications = nextMedications.filter((medication) => medication.is_active);
+      const backendMedicationLogs = (
+        await Promise.all(
+          activeMedications.map((medication) =>
+            api.medicationLogs(accessToken, medication.id).catch(() => [] as MedicationLog[])
+          )
+        )
+      )
+        .flat()
+        .filter((log) => !log.skipped)
+        .map((log) => {
+          const medication = activeMedications.find((item) => item.id === log.medication_id);
+          return {
+            id: log.id,
+            date: medicationLogDate(log),
+            name: medication?.name ?? "Medication",
+            taken: true,
+            createdAt: log.taken_at,
+          };
+        });
       setProfile(nextProfile);
       setPrediction(nextPrediction);
       setCycles(nextCycles);
@@ -93,6 +128,7 @@ export function PatientReportScreen() {
       setMoodStats(nextMoodStats);
       setProgress(nextProgress);
       setCycleDays(nextCycleDays);
+      setMedicationLogs([...backendMedicationLogs, ...nextLocalMedicationLogs]);
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load report");
@@ -222,6 +258,35 @@ export function PatientReportScreen() {
     return grid;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moodEntries, recentCycles, cycleLength]);
+
+  const medicationSummary = useMemo(() => {
+    const byName: Record<string, Set<string>> = {};
+    medicationLogs.forEach((log) => {
+      if (!log.taken) return;
+      byName[log.name] = byName[log.name] ?? new Set<string>();
+      byName[log.name].add(log.date);
+    });
+    return Object.entries(byName)
+      .map(([name, dates]) => ({
+        name,
+        dates: Array.from(dates).sort((a, b) => b.localeCompare(a)),
+      }))
+      .sort((a, b) => b.dates.length - a.dates.length)
+      .slice(0, 8);
+  }, [medicationLogs]);
+
+  const medicationDayGrid = useMemo(() => {
+    const grid: Record<string, Record<number, number>> = {};
+    medicationLogs.forEach((log) => {
+      if (!log.taken) return;
+      const day = dayOfCycle(log.date);
+      if (!day) return;
+      grid[log.name] = grid[log.name] ?? {};
+      grid[log.name][day] = (grid[log.name][day] ?? 0) + 1;
+    });
+    return grid;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [medicationLogs, recentCycles, cycleLength]);
 
   const exportedOn = new Date().toISOString();
 
@@ -372,7 +437,14 @@ export function PatientReportScreen() {
   .day-dot.symptom { background: #B760E3; }
   .day-dot.flow { background: #5C7FE7; }
   .day-dot.mood { background: #F2A93B; }
+  .day-dot.medication { background: #38A169; }
   .day-num-head { font-size: 7px; color: #7F7486; font-weight: 700; text-align: center; }
+
+  .med-list { margin-top: 8px; }
+  .med-row { display: flex; align-items: center; justify-content: space-between;
+             border-bottom: 1px solid #F0DCE7; padding: 5px 0; font-size: 11px; }
+  .med-name { font-weight: 800; color: #231F29; }
+  .med-count { color: #38A169; font-weight: 900; }
 
   .empty { font-size: 11px; color: #7F7486; padding: 6px 0; text-align: center; }
 </style>
@@ -425,6 +497,25 @@ ${headerBlock}
 <section>
   <div class="section-sub">MOOD</div>
   ${buildDayGridTable(moodDayGrid, "mood", "No mood entries logged yet.")}
+</section>
+
+<section>
+  <div class="section-sub">MEDICATION INTAKE</div>
+  ${buildDayGridTable(medicationDayGrid, "medication", "No medication intake logged yet.")}
+  <div class="med-list">
+    ${
+      medicationSummary.length
+        ? medicationSummary
+            .map(
+              ({ name, dates }) =>
+                `<div class="med-row"><span class="med-name">${escape(name)}</span><span class="med-count">${dates
+                  .map((date) => escape(formatDay(date)))
+                  .join(", ")}</span></div>`
+            )
+            .join("")
+        : ""
+    }
+  </div>
 </section>
 
 </body>
@@ -617,6 +708,29 @@ ${headerBlock}
       </GlassCard>
 
       <GlassCard>
+        <Text style={styles.sectionHeader}>Medication intake</Text>
+        {medicationSummary.length === 0 ? (
+          <Text style={styles.empty}>No medication intake logged yet.</Text>
+        ) : (
+          <View style={styles.medicationList}>
+            {medicationSummary.map(({ name, dates }) => (
+              <View key={name} style={styles.medicationRow}>
+                <View style={styles.medicationIcon}>
+                  <Feather name="check" size={14} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.medicationName}>{name}</Text>
+                  <Text style={styles.medicationMeta}>
+                    Taken on {dates.map((date) => formatDay(date)).join(", ")}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+      </GlassCard>
+
+      <GlassCard>
         <Text style={styles.sectionHeader}>Activity summary</Text>
         <View style={styles.statGrid}>
           <View style={styles.statBox}>
@@ -757,6 +871,25 @@ const styles = StyleSheet.create({
   },
   moodFill: { height: "100%", backgroundColor: "#A94D7A" },
   moodCount: { width: 36, fontSize: 12, color: "#231F29", fontWeight: "800", textAlign: "right" },
+  medicationList: { gap: 10 },
+  medicationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0DCE7",
+  },
+  medicationIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#38A169",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  medicationName: { fontSize: 14, color: "#231F29", fontWeight: "800" },
+  medicationMeta: { fontSize: 12, color: "#7F7486", marginTop: 2 },
   footer: { fontSize: 11, color: "#7F7486", textAlign: "center", marginTop: 8 },
   error: { color: "#C9184A" },
   exportBtn: {

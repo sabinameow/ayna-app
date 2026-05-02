@@ -10,6 +10,7 @@ import { GlassCard } from "@/components/GlassCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
+import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
 import type { PatientProfile, ProgressSummary } from "@/types/api";
 
 type MenuRoute = "PatientCycle" | "PatientAppointments" | "PatientChat" | "PatientReport" | null;
@@ -31,6 +32,7 @@ export function PatientProfileScreen() {
   const [cycleLength, setCycleLength] = useState("28");
   const [periodLength, setPeriodLength] = useState("5");
   const [error, setError] = useState("");
+  const saveFeedback = useSaveFeedback();
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -52,13 +54,21 @@ export function PatientProfileScreen() {
 
   async function save() {
     if (!accessToken) return;
-    await api.updatePatientProfile(accessToken, {
-      full_name: fullName,
-      average_cycle_length: Number(cycleLength),
-      average_period_length: Number(periodLength),
-    });
-    setEditing(false);
-    await load();
+    saveFeedback.markSaving();
+    try {
+      await api.updatePatientProfile(accessToken, {
+        full_name: fullName,
+        average_cycle_length: Number(cycleLength),
+        average_period_length: Number(periodLength),
+      });
+      setEditing(false);
+      setError("");
+      saveFeedback.markSaved();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save profile");
+      saveFeedback.markError();
+    }
   }
 
   return (
@@ -143,7 +153,12 @@ export function PatientProfileScreen() {
             onChangeText={setPeriodLength}
             keyboardType="number-pad"
           />
-          <PrimaryButton label="Save changes" onPress={save} />
+          <PrimaryButton
+            label={saveFeedbackLabel(saveFeedback.status, "Save changes")}
+            onPress={save}
+            disabled={saveFeedback.status === "saving"}
+            feedbackStatus={saveFeedback.status}
+          />
         </GlassCard>
       )}
 
