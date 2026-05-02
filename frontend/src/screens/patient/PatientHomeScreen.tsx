@@ -151,18 +151,24 @@ export function PatientHomeScreen() {
 
       {articles.length ? (
         articles.slice(0, 3).map((article) => (
-          <GlassCard key={article.id} style={styles.articleCard}>
-            <View style={[styles.articleImage, styles.articleImagePlaceholder]}>
-              <Feather name="file-text" size={20} color="#E53F8F" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.articleTitle} numberOfLines={2}>
-                {article.title}
-              </Text>
-              <Text style={styles.articleMeta}>5 min read</Text>
-            </View>
-            <Feather name="bookmark" size={16} color="#E53F8F" />
-          </GlassCard>
+          <Pressable
+            key={article.id}
+            onPress={() => navigation.navigate("Article", { article })}
+            accessibilityRole="button"
+            accessibilityLabel={article.title}
+          >
+            <GlassCard style={styles.articleCard}>
+              <View style={[styles.articleImage, styles.articleImagePlaceholder]}>
+                <Feather name="file-text" size={20} color="#E53F8F" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.articleTitle} numberOfLines={2}>
+                  {article.title}
+                </Text>
+                <Text style={styles.articleMeta}>5 min read</Text>
+              </View>
+            </GlassCard>
+          </Pressable>
         ))
       ) : (
         <GlassCard>
