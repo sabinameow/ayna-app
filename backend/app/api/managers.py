@@ -1,6 +1,7 @@
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,9 +18,12 @@ from backend.app.schemas.doctor import ScheduleOut
 from backend.app.schemas.manager import ManagerOut
 from backend.app.services.chat_service import close_session, get_session_messages
 from backend.app.services.appointment_service import (
+    cancel_appointment_record,
     get_available_slots,
-    notify_appointment_cancelled,
     notify_appointment_updated,
+    serialize_appointment,
+    serialize_appointments,
+    update_appointment_status_record,
 )
 
 router = APIRouter(prefix="/manager", tags=["Manager"])
@@ -103,7 +107,7 @@ async def list_appointments(
     result = await db.execute(
         select(Appointment).order_by(Appointment.scheduled_at.desc())
     )
-    return list(result.scalars().all())
+    return await serialize_appointments(db, list(result.scalars().all()))
 
 
 @router.put("/appointments/{appointment_id}", response_model=AppointmentOut)
@@ -120,6 +124,15 @@ async def update_appointment(
     if not appointment:
         raise NotFoundException("Appointment not found")
 
+    if body.status is not None:
+        updated = await update_appointment_status_record(
+            db,
+            appointment=appointment,
+            status=body.status,
+            notes=body.notes,
+        )
+        return await serialize_appointment(db, updated)
+
     previous_status = appointment.status
     previous_scheduled_at = appointment.scheduled_at
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -132,7 +145,7 @@ async def update_appointment(
         previous_status=previous_status,
         previous_scheduled_at=previous_scheduled_at,
     )
-    return appointment
+    return await serialize_appointment(db, appointment)
 
 
 @router.delete("/appointments/{appointment_id}", status_code=204)
@@ -147,10 +160,7 @@ async def cancel_appointment(
     appointment = result.scalar_one_or_none()
     if not appointment:
         raise NotFoundException("Appointment not found")
-    appointment.status = "cancelled"
-    await notify_appointment_cancelled(db, appointment, actor_role="manager")
-    await db.delete(appointment)
-    await db.flush()
+    await cancel_appointment_record(db, appointment, actor_role="manager")
     return None
 
 
@@ -166,7 +176,8 @@ async def list_all_schedules(
 @router.get("/doctors/{doctor_id}/available-slots", response_model=list[AvailableSlot])
 async def available_slots(
     doctor_id: uuid.UUID,
+    date: date | None = Query(default=None),
     current_user: User = Depends(require_manager()),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_available_slots(db, doctor_id)
+    return await get_available_slots(db, doctor_id, date)

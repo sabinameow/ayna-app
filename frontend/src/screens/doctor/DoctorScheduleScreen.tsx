@@ -1,6 +1,5 @@
-import { Feather } from "@expo/vector-icons";
 import React, { useCallback, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import { api } from "@/api/client";
 import { AppInput } from "@/components/AppInput";
@@ -8,257 +7,414 @@ import { AppScreen } from "@/components/AppScreen";
 import { GlassCard } from "@/components/GlassCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
-import { weekdayLabel } from "@/utils/format";
+import type { DoctorAvailabilitySlot } from "@/types/api";
 
-type EditableSlot = {
-  weekday: number;
+type EditableDay = {
+  date: string;
+  shortLabel: string;
+  titleLabel: string;
+  subtitleLabel: string;
   active: boolean;
-  start_time: string;
-  end_time: string;
-  slot_duration_minutes: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: string;
+  existingSlots: DoctorAvailabilitySlot[];
 };
+
+function buildWorkweek(base: Date) {
+  const dates: EditableDay[] = [];
+  const cursor = new Date(base);
+
+  while (dates.length < 5) {
+    const day = cursor.getDay();
+    if (day >= 1 && day <= 5) {
+      dates.push({
+        date: cursor.toISOString().slice(0, 10),
+        shortLabel: cursor.toLocaleString("en-US", { weekday: "short" }).charAt(0),
+        titleLabel: cursor.toLocaleString("en-US", { weekday: "short" }),
+        subtitleLabel: cursor.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        active: false,
+        startTime: "09:00",
+        endTime: "17:00",
+        durationMinutes: "30",
+        existingSlots: [],
+      });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return dates;
+}
+
+function minutesFromTime(value: string) {
+  const [hour, minute] = value.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return Number.NaN;
+  return hour * 60 + minute;
+}
+
+function timeFromMinutes(value: number) {
+  const hour = Math.floor(value / 60);
+  const minute = value % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function slotKey(startTime: string, endTime: string) {
+  return `${startTime.slice(0, 5)}-${endTime.slice(0, 5)}`;
+}
+
+function inferDuration(slots: DoctorAvailabilitySlot[]) {
+  if (!slots.length) return "30";
+  const sorted = [...slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  if (sorted.length > 1) {
+    const diff =
+      minutesFromTime(sorted[1].start_time.slice(0, 5)) -
+      minutesFromTime(sorted[0].start_time.slice(0, 5));
+    if (diff > 0) return String(diff);
+  }
+  const first =
+    minutesFromTime(sorted[0].end_time.slice(0, 5)) -
+    minutesFromTime(sorted[0].start_time.slice(0, 5));
+  return first > 0 ? String(first) : "30";
+}
+
+function buildEditableDays(
+  template: EditableDay[],
+  availability: DoctorAvailabilitySlot[]
+) {
+  return template.map((day) => {
+    const daySlots = availability
+      .filter((slot) => slot.date === day.date)
+      .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+    if (!daySlots.length) {
+      return day;
+    }
+
+    return {
+      ...day,
+      active: true,
+      startTime: daySlots[0].start_time.slice(0, 5),
+      endTime: daySlots[daySlots.length - 1].end_time.slice(0, 5),
+      durationMinutes: inferDuration(daySlots),
+      existingSlots: daySlots,
+    };
+  });
+}
+
+function buildDesiredIntervals(day: EditableDay) {
+  if (!day.active) return [] as { start: string; end: string }[];
+
+  const start = minutesFromTime(day.startTime);
+  const end = minutesFromTime(day.endTime);
+  const duration = Number(day.durationMinutes);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(duration)) {
+    throw new Error(`Invalid time format for ${day.titleLabel}`);
+  }
+  if (duration <= 0) {
+    throw new Error(`Duration must be greater than 0 for ${day.titleLabel}`);
+  }
+  if (end <= start) {
+    throw new Error(`End time must be after start time for ${day.titleLabel}`);
+  }
+
+  const intervals: { start: string; end: string }[] = [];
+  for (let cursor = start; cursor + duration <= end; cursor += duration) {
+    intervals.push({
+      start: `${timeFromMinutes(cursor)}:00`,
+      end: `${timeFromMinutes(cursor + duration)}:00`,
+    });
+  }
+
+  if (!intervals.length) {
+    throw new Error(`No slots fit inside ${day.titleLabel}'s range`);
+  }
+
+  return intervals;
+}
 
 export function DoctorScheduleScreen() {
   const { accessToken } = useAuth();
-  const [slots, setSlots] = useState<EditableSlot[]>(
-    Array.from({ length: 5 }, (_, weekday) => ({
-      weekday,
-      active: weekday !== 2,
-      start_time: "09:00",
-      end_time: "17:00",
-      slot_duration_minutes: "30",
-    }))
-  );
-  const [saved, setSaved] = useState(false);
+  const { showToast } = useToast();
+  const workweek = useMemo(() => buildWorkweek(new Date()), []);
+  const [days, setDays] = useState<EditableDay[]>(workweek);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const loadSchedule = useCallback(() => {
+  const load = useCallback(async () => {
     if (!accessToken) return;
-    void api
-      .doctorSchedule(accessToken)
-      .then((existing) => {
-        if (!existing.length) return;
-        setSlots(
-          Array.from({ length: 5 }, (_, weekday) => {
-            const match = existing.find((s) => s.weekday === weekday);
-            return {
-              weekday,
-              active: Boolean(match),
-              start_time: match?.start_time?.slice(0, 5) || "09:00",
-              end_time: match?.end_time?.slice(0, 5) || "17:00",
-              slot_duration_minutes: String(match?.slot_duration_minutes ?? 30),
-            };
-          })
+    setLoading(true);
+    setError("");
+    try {
+      const availability = await api.doctorAvailability(accessToken);
+      setDays(buildEditableDays(workweek, availability));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load available slots");
+    } finally {
+      setLoading(false);
+    }
+  }, [accessToken, workweek]);
+
+  useFocusReload(load);
+
+  const activeCount = useMemo(
+    () => days.filter((day) => day.active).length,
+    [days]
+  );
+
+  function updateDay(date: string, patch: Partial<EditableDay>) {
+    setDays((current) =>
+      current.map((day) => (day.date === date ? { ...day, ...patch } : day))
+    );
+  }
+
+  function toggleDay(day: EditableDay) {
+    const hasBooked = day.existingSlots.some((slot) => slot.is_booked);
+    if (hasBooked && day.active) {
+      setError("Booked slots keep this day active until the appointment is resolved.");
+      showToast("Booked slots cannot be turned off", "error");
+      return;
+    }
+    updateDay(day.date, { active: !day.active });
+  }
+
+  async function saveSchedule() {
+    if (!accessToken || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      for (const day of days) {
+        const hasBooked = day.existingSlots.some((slot) => slot.is_booked);
+        if (hasBooked) {
+          continue;
+        }
+
+        const desired = buildDesiredIntervals(day);
+        const desiredKeys = new Set(desired.map((slot) => slotKey(slot.start, slot.end)));
+
+        for (const slot of day.existingSlots) {
+          const key = slotKey(slot.start_time, slot.end_time);
+          const shouldDelete = !slot.is_booked && !desiredKeys.has(key);
+          if (shouldDelete) {
+            await api.deleteDoctorAvailability(accessToken, slot.id);
+          }
+        }
+
+        if (!day.active) {
+          continue;
+        }
+
+        const existingKeys = new Set(
+          day.existingSlots.map((slot) => slotKey(slot.start_time, slot.end_time))
         );
-      })
-      .catch(() => undefined);
-  }, [accessToken]);
-  useFocusReload(loadSchedule);
 
-  const payload = useMemo(
-    () =>
-      slots
-        .filter((s) => s.active)
-        .map((s) => ({
-          weekday: s.weekday,
-          start_time: `${s.start_time}:00`,
-          end_time: `${s.end_time}:00`,
-          slot_duration_minutes: Number(s.slot_duration_minutes),
-        })),
-    [slots]
-  );
+        for (const slot of desired) {
+          if (existingKeys.has(slotKey(slot.start, slot.end))) continue;
+          await api.createDoctorAvailability(accessToken, {
+            date: day.date,
+            start_time: slot.start,
+            end_time: slot.end,
+          });
+        }
+      }
 
-  function toggleDay(weekday: number) {
-    setSlots((prev) =>
-      prev.map((s) => (s.weekday === weekday ? { ...s, active: !s.active } : s))
-    );
+      await load();
+      showToast("Saved successfully", "success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save schedule";
+      setError(message);
+      showToast("Something went wrong", "error");
+    } finally {
+      setSaving(false);
+    }
   }
-
-  function updateSlot(weekday: number, key: keyof EditableSlot, value: string) {
-    setSlots((prev) =>
-      prev.map((s) => (s.weekday === weekday ? { ...s, [key]: value } : s))
-    );
-  }
-
-  async function save() {
-    if (!accessToken) return;
-    await api.updateDoctorSchedule(accessToken, payload);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
-
-  const activeCount = slots.filter((s) => s.active).length;
 
   return (
     <AppScreen>
       <View style={styles.header}>
         <Text style={styles.title}>My schedule</Text>
         <Text style={styles.subtitle}>
-          {activeCount} active day{activeCount !== 1 ? "s" : ""} per week
+          {loading
+            ? "Loading your week"
+            : `${activeCount} active day${activeCount === 1 ? "" : "s"} per week`}
         </Text>
       </View>
 
-      {/* Week summary */}
       <View style={styles.weekRow}>
-        {slots.map((slot) => (
+        {days.map((day) => (
           <Pressable
-            key={slot.weekday}
-            onPress={() => toggleDay(slot.weekday)}
-            style={[styles.dayPill, slot.active && styles.dayPillActive]}
+            key={day.date}
+            onPress={() => toggleDay(day)}
+            style={[styles.dayPill, day.active && styles.dayPillActive]}
           >
-            <Text style={[styles.dayPillText, slot.active && styles.dayPillTextActive]}>
-              {weekdayLabel(slot.weekday).charAt(0)}
+            <Text style={[styles.dayPillText, day.active && styles.dayPillTextActive]}>
+              {day.shortLabel}
             </Text>
           </Pressable>
         ))}
       </View>
 
-      {/* Slot editors */}
-      {slots.map((slot) => (
-        <GlassCard
-          key={slot.weekday}
-          style={[styles.slotCard, !slot.active && styles.slotCardOff]}
-        >
-          <View style={styles.slotHeader}>
-            <View>
-              <Text style={styles.dayLabel}>{weekdayLabel(slot.weekday)}</Text>
-              {slot.active ? (
-                <Text style={styles.slotMeta}>
-                  {slot.start_time} – {slot.end_time} · {slot.slot_duration_minutes}min slots
+      {days.map((day) => {
+        const hasBooked = day.existingSlots.some((slot) => slot.is_booked);
+        return (
+          <GlassCard
+            key={day.date}
+            style={[styles.dayCard, !day.active && styles.dayCardInactive]}
+          >
+            <View style={styles.cardHeader}>
+              <View>
+                <Text style={styles.cardTitle}>{day.titleLabel}</Text>
+                <Text style={styles.cardMeta}>
+                  {day.active
+                    ? `${day.subtitleLabel} · ${day.startTime} – ${day.endTime} · ${day.durationMinutes}min slots`
+                    : `${day.subtitleLabel} · Not available`}
                 </Text>
-              ) : (
-                <Text style={styles.offMeta}>Not available</Text>
-              )}
+                {hasBooked ? (
+                  <Text style={styles.bookedHint}>Booked slots lock this day until completed.</Text>
+                ) : null}
+              </View>
+              <Switch
+                value={day.active}
+                onValueChange={() => toggleDay(day)}
+                disabled={hasBooked && day.active}
+                trackColor={{ false: "#E8E4F8", true: "#3F63F6" }}
+                thumbColor="#FFFFFF"
+              />
             </View>
-            <Pressable
-              onPress={() => toggleDay(slot.weekday)}
-              style={[styles.toggle, slot.active && styles.toggleActive]}
-            >
-              <View style={[styles.toggleDot, slot.active && styles.toggleDotActive]} />
-            </Pressable>
-          </View>
 
-          {slot.active && (
-            <View style={styles.timeRow}>
-              <View style={{ flex: 1 }}>
-                <AppInput
-                  label="Start"
-                  value={slot.start_time}
-                  onChangeText={(v) => updateSlot(slot.weekday, "start_time", v)}
-                />
+            {day.active ? (
+              <View style={styles.inputsRow}>
+                <View style={styles.inputWrap}>
+                  <AppInput
+                    label="Start"
+                    value={day.startTime}
+                    editable={!hasBooked}
+                    onChangeText={(value) => updateDay(day.date, { startTime: value })}
+                  />
+                </View>
+                <View style={styles.inputWrap}>
+                  <AppInput
+                    label="End"
+                    value={day.endTime}
+                    editable={!hasBooked}
+                    onChangeText={(value) => updateDay(day.date, { endTime: value })}
+                  />
+                </View>
+                <View style={styles.inputWrap}>
+                  <AppInput
+                    label="Mins"
+                    keyboardType="number-pad"
+                    value={day.durationMinutes}
+                    editable={!hasBooked}
+                    onChangeText={(value) => updateDay(day.date, { durationMinutes: value })}
+                  />
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <AppInput
-                  label="End"
-                  value={slot.end_time}
-                  onChangeText={(v) => updateSlot(slot.weekday, "end_time", v)}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <AppInput
-                  label="Mins"
-                  keyboardType="number-pad"
-                  value={slot.slot_duration_minutes}
-                  onChangeText={(v) => updateSlot(slot.weekday, "slot_duration_minutes", v)}
-                />
-              </View>
-            </View>
-          )}
-        </GlassCard>
-      ))}
+            ) : null}
+          </GlassCard>
+        );
+      })}
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <PrimaryButton
-        label={saved ? "Schedule saved!" : "Save schedule"}
-        onPress={save}
-        style={[styles.saveBtn, saved && styles.saveBtnDone]}
+        label={saving ? "Saving..." : "Save schedule"}
+        onPress={saveSchedule}
+        disabled={saving}
+        loading={saving}
+        style={styles.saveButton}
       />
-
-      {activeCount > 0 && (
-        <GlassCard style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <Feather name="info" size={14} color="#3F6CF6" />
-            <Text style={styles.summaryTitle}>Active schedule</Text>
-          </View>
-          {slots
-            .filter((s) => s.active)
-            .map((s) => (
-              <View key={s.weekday} style={styles.summaryRow}>
-                <Text style={styles.summaryDay}>{weekdayLabel(s.weekday)}</Text>
-                <Text style={styles.summaryTime}>
-                  {s.start_time} – {s.end_time}
-                </Text>
-                <Text style={styles.summarySlots}>{s.slot_duration_minutes}m slots</Text>
-              </View>
-            ))}
-        </GlassCard>
-      )}
     </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { marginBottom: 20 },
-  title: { fontSize: 24, fontWeight: "800", color: "#231F29" },
-  subtitle: { fontSize: 13, color: "#7F7486", marginTop: 4 },
-  weekRow: { flexDirection: "row", gap: 10, marginBottom: 20, justifyContent: "center" },
+  header: {
+    marginBottom: 8,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  subtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#8A7E94",
+  },
+  weekRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   dayPill: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#F2F4F8",
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#F4F1FF",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#D9E1FF",
+    borderColor: "#E0D8F7",
   },
-  dayPillActive: { backgroundColor: "#3F6CF6", borderColor: "#3F6CF6" },
-  dayPillText: { fontSize: 14, fontWeight: "800", color: "#7F7486" },
-  dayPillTextActive: { color: "#FFF" },
-  slotCard: { marginBottom: 12 },
-  slotCardOff: { opacity: 0.6 },
-  slotHeader: {
+  dayPillActive: {
+    backgroundColor: "#3F63F6",
+    borderColor: "#3F63F6",
+  },
+  dayPillText: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#7E75A0",
+  },
+  dayPillTextActive: {
+    color: "#FFFFFF",
+  },
+  dayCard: {
+    paddingHorizontal: 24,
+    paddingVertical: 22,
+    gap: 14,
+  },
+  dayCardInactive: {
+    opacity: 0.72,
+  },
+  cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 4,
+    gap: 12,
   },
-  dayLabel: { fontSize: 17, fontWeight: "800", color: "#231F29" },
-  slotMeta: { fontSize: 12, color: "#7F7486", marginTop: 2 },
-  offMeta: { fontSize: 12, color: "#B0A8B9", marginTop: 2 },
-  toggle: {
-    width: 44,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: "#D9E1FF",
-    justifyContent: "center",
-    paddingHorizontal: 3,
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#231F29",
   },
-  toggleActive: { backgroundColor: "#3F6CF6" },
-  toggleDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#FFF",
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 2,
+  cardMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#8A7E94",
   },
-  toggleDotActive: { alignSelf: "flex-end" },
-  timeRow: { flexDirection: "row", gap: 10, marginTop: 12 },
-  saveBtn: { backgroundColor: "#3F6CF6", marginTop: 4 },
-  saveBtnDone: { backgroundColor: "#38A169" },
-  summaryCard: { backgroundColor: "#EAF0FF", marginTop: 4 },
-  summaryHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 },
-  summaryTitle: { fontSize: 14, fontWeight: "700", color: "#3356C4" },
-  summaryRow: {
+  bookedHint: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#9B5E11",
+  },
+  inputsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#C4D3FF",
+    gap: 12,
   },
-  summaryDay: { fontWeight: "700", color: "#231F29", width: 40 },
-  summaryTime: { color: "#231F29", fontSize: 13, flex: 1, textAlign: "center" },
-  summarySlots: { color: "#7F7486", fontSize: 12 },
+  inputWrap: {
+    flex: 1,
+  },
+  error: {
+    color: "#E25555",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  saveButton: {
+    marginTop: 4,
+    backgroundColor: "#3F63F6",
+  },
 });

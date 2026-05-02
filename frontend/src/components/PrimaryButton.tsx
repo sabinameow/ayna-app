@@ -9,12 +9,15 @@ type Props = PressableProps & {
 export function PrimaryButton({ label, loading, style, disabled, ...rest }: Props) {
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.button,
-        pressed && styles.pressed,
-        (disabled || loading) && styles.disabled,
-        style,
-      ]}
+      style={(state) => {
+        const resolvedStyle = typeof style === "function" ? style(state) : style;
+        return [
+          styles.button,
+          state.pressed && styles.pressed,
+          (disabled || loading) && styles.disabled,
+          resolvedStyle,
+        ];
+      }}
       disabled={disabled || loading}
       {...rest}
     >

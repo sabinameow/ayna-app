@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import React, { useCallback, useMemo, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { api } from "@/api/client";
 import { AppInput } from "@/components/AppInput";
@@ -15,20 +15,22 @@ import { useNotifications } from "@/hooks/useNotifications";
 import type { Appointment, AvailableSlot, DoctorProfile, Symptom } from "@/types/api";
 import { formatDate, formatTime } from "@/utils/format";
 
-type Step = "list" | "doctors" | "detail" | "history";
+type Step = "list" | "doctors" | "detail";
 
 function buildWeekStrip(base: Date) {
-  const result: { date: string; day: number; weekday: string }[] = [];
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(base);
-    d.setDate(base.getDate() + i);
-    result.push({
-      date: d.toISOString().slice(0, 10),
-      day: d.getDate(),
-      weekday: d.toLocaleString("en-US", { weekday: "short" }).slice(0, 3),
-    });
-  }
-  return result;
+  return Array.from({ length: 6 }, (_, index) => {
+    const next = new Date(base);
+    next.setDate(base.getDate() + index);
+    return {
+      date: next.toISOString().slice(0, 10),
+      day: String(next.getDate()),
+      weekday: next.toLocaleString("en-US", { weekday: "short" }).slice(0, 3),
+    };
+  });
+}
+
+function doctorMetaText(doctor: DoctorProfile) {
+  return doctor.specialization || "Gynecologist";
 }
 
 export function PatientAppointmentsScreen() {
@@ -41,18 +43,23 @@ export function PatientAppointmentsScreen() {
   const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
   const [step, setStep] = useState<Step>("list");
   const [selectedDoctor, setSelectedDoctor] = useState<DoctorProfile | null>(null);
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [reason, setReason] = useState("");
-  const [showSuccess, setShowSuccess] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [booking, setBooking] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!accessToken) return;
+    setLoading(true);
+    setError("");
     try {
       const [nextDoctors, nextAppointments, nextSymptoms] = await Promise.all([
-        api.listDoctors(),
+        api.patientDoctors(accessToken),
         api.patientAppointments(accessToken),
         api.listSymptomsCatalog(accessToken),
       ]);
@@ -61,56 +68,78 @@ export function PatientAppointmentsScreen() {
       setSymptoms(nextSymptoms.slice(0, 8));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load appointments");
+    } finally {
+      setLoading(false);
     }
   }, [accessToken]);
   useFocusReload(load);
 
+  const loadSlots = useCallback(
+    async (doctorId: string, dateValue: string) => {
+      if (!accessToken) return;
+      setLoadingSlots(true);
+      setError("");
+      try {
+        const slots = await api.availableSlots(accessToken, doctorId, dateValue);
+        setAvailableSlots(slots);
+      } catch (err) {
+        setAvailableSlots([]);
+        setError(err instanceof Error ? err.message : "Could not load available slots");
+      } finally {
+        setLoadingSlots(false);
+      }
+    },
+    [accessToken]
+  );
+
   async function selectDoctor(doctor: DoctorProfile) {
-    if (!accessToken) return;
     setSelectedDoctor(doctor);
-    setSelectedSlot(null);
-    const slots = await api.availableSlots(accessToken, doctor.id, selectedDate).catch(() => []);
-    setAvailableSlots(slots);
+    setSelectedSlotId(null);
     setStep("detail");
+    await loadSlots(doctor.id, selectedDate);
   }
 
-  async function changeDate(date: string) {
-    if (!accessToken || !selectedDoctor) return;
-    setSelectedDate(date);
-    setSelectedSlot(null);
-    const slots = await api.availableSlots(accessToken, selectedDoctor.id, date).catch(() => []);
-    setAvailableSlots(slots);
+  async function changeDate(dateValue: string) {
+    if (!selectedDoctor) return;
+    setSelectedDate(dateValue);
+    setSelectedSlotId(null);
+    await loadSlots(selectedDoctor.id, dateValue);
   }
 
   async function book() {
-    if (!accessToken || !selectedDoctor || !selectedSlot) return;
+    if (!accessToken || !selectedDoctor || !selectedSlotId || booking) return;
+    setBooking(true);
+    setError("");
     try {
       await api.createAppointment(accessToken, {
-        doctor_id: selectedDoctor.id,
-        scheduled_at: `${selectedDate}T${selectedSlot}:00`,
+        slot_id: selectedSlotId,
         reason: reason || undefined,
         selected_symptom_ids: selectedSymptoms.length ? selectedSymptoms : undefined,
       });
-      setShowSuccess(true);
+      showToast("Appointment booked successfully", "success");
+      await Promise.all([load(), loadSlots(selectedDoctor.id, selectedDate), refreshUnread()]);
       setReason("");
       setSelectedSymptoms([]);
-      showToast("Saved successfully", "success");
-      await Promise.all([load(), refreshUnread()]);
+      setSelectedSlotId(null);
+      setSelectedDoctor(null);
+      setStep("list");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to book appointment");
-      showToast("Something went wrong", "error");
+      const message = err instanceof Error ? err.message : "Failed to book appointment";
+      setError(message);
+      if (err instanceof api.error && err.status === 409) {
+        showToast("This slot is already booked", "error");
+      } else {
+        showToast("Failed to book appointment", "error");
+      }
+    } finally {
+      setBooking(false);
     }
   }
 
-  function backToHome() {
-    setShowSuccess(false);
-    setSelectedDoctor(null);
-    setSelectedSlot(null);
-    setStep("list");
-  }
-
   async function cancelAppointment(id: string) {
-    if (!accessToken) return;
+    if (!accessToken || cancellingId) return;
+    setCancellingId(id);
+    setError("");
     try {
       await api.cancelAppointment(accessToken, id);
       showToast("Deleted", "success");
@@ -118,13 +147,14 @@ export function PatientAppointmentsScreen() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to cancel appointment");
       showToast("Something went wrong", "error");
+    } finally {
+      setCancellingId(null);
     }
   }
 
   const symptomSet = useMemo(() => new Set(selectedSymptoms), [selectedSymptoms]);
   const weekStrip = useMemo(() => buildWeekStrip(new Date()), []);
 
-  // ==== LIST STEP (default) ====
   if (step === "list") {
     return (
       <AppScreen>
@@ -132,55 +162,73 @@ export function PatientAppointmentsScreen() {
           <Text style={styles.title}>Appointments</Text>
           <View style={styles.headerActions}>
             <NotificationBell />
-            <Pressable style={styles.bellPill} onPress={() => setStep("doctors")}>
+            <Pressable style={styles.addPill} onPress={() => setStep("doctors")}>
               <Feather name="plus" size={18} color="#E53F8F" />
             </Pressable>
           </View>
         </View>
 
         <Pressable onPress={() => setStep("doctors")}>
-          <GlassCard style={styles.bookCta}>
-            <View style={styles.ctaIcon}>
-              <Feather name="plus" size={20} color="#FFFFFF" />
+          <GlassCard style={styles.heroCard}>
+            <View style={styles.heroIcon}>
+              <Feather name="calendar" size={22} color="#FFFFFF" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.ctaTitle}>Book a new appointment</Text>
-              <Text style={styles.ctaMeta}>Pick a doctor and choose a slot</Text>
+              <Text style={styles.heroTitle}>Book a new appointment</Text>
+              <Text style={styles.heroMeta}>Choose a doctor and lock a real slot</Text>
             </View>
             <Feather name="chevron-right" size={20} color="#E53F8F" />
           </GlassCard>
         </Pressable>
 
         <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>My appointments</Text>
+          <Text style={styles.sectionTitle}>My booked appointments</Text>
+          {loading ? <Text style={styles.helper}>Loading...</Text> : null}
         </View>
 
         {appointments.length ? (
-          appointments.map((a) => (
-            <GlassCard key={a.id} style={styles.apptCard}>
-              <View style={[styles.statusBar, { backgroundColor: statusColor(a.status) }]} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.apptDate}>{formatDate(a.scheduled_at)}</Text>
-                <Text style={styles.apptTime}>{formatTime(a.scheduled_at.slice(11, 16))}</Text>
-                <Text style={styles.apptReason}>{a.reason || "General consultation"}</Text>
-              </View>
-              <View style={{ alignItems: "flex-end", gap: 6 }}>
-                <View style={[styles.statusChip, { backgroundColor: statusBg(a.status) }]}>
-                  <Text style={[styles.statusText, { color: statusColor(a.status) }]}>
-                    {a.status}
+          appointments.map((appointment) => (
+            <GlassCard key={appointment.id} style={styles.appointmentCard}>
+              <View style={styles.appointmentTop}>
+                <View style={styles.appointmentAvatar}>
+                  <Text style={styles.appointmentAvatarText}>
+                    {(appointment.doctor_name || "D").charAt(0).toUpperCase()}
                   </Text>
                 </View>
-                {(a.status === "pending" || a.status === "confirmed") && (
-                  <Pressable onPress={() => cancelAppointment(a.id)}>
-                    <Text style={styles.cancelText}>Cancel</Text>
-                  </Pressable>
-                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.appointmentName}>
+                    {appointment.doctor_name || "Doctor"}
+                  </Text>
+                  <Text style={styles.appointmentSub}>{appointment.reason || "General consultation"}</Text>
+                  <Text style={styles.appointmentTime}>
+                    {formatDate(appointment.scheduled_at)} · {formatTime(appointment.scheduled_at.slice(11, 16))}
+                  </Text>
+                </View>
+                <View style={[styles.statusPill, { backgroundColor: statusBg(appointment.status) }]}>
+                  <Text style={[styles.statusText, { color: statusColor(appointment.status) }]}>
+                    {appointment.status}
+                  </Text>
+                </View>
               </View>
+
+              {(appointment.status === "pending" || appointment.status === "confirmed") ? (
+                <Pressable
+                  onPress={() => void cancelAppointment(appointment.id)}
+                  disabled={cancellingId === appointment.id}
+                  style={styles.inlineAction}
+                >
+                  <Text style={styles.inlineActionText}>
+                    {cancellingId === appointment.id ? "Cancelling..." : "Cancel appointment"}
+                  </Text>
+                </Pressable>
+              ) : null}
             </GlassCard>
           ))
         ) : (
           <GlassCard>
-            <Text style={styles.empty}>No appointments yet.</Text>
+            <Text style={styles.empty}>
+              {loading ? "Loading appointments..." : "No appointments yet."}
+            </Text>
           </GlassCard>
         )}
 
@@ -189,7 +237,6 @@ export function PatientAppointmentsScreen() {
     );
   }
 
-  // ==== DOCTOR LIST STEP ====
   if (step === "doctors") {
     return (
       <AppScreen>
@@ -197,171 +244,168 @@ export function PatientAppointmentsScreen() {
           <Pressable style={styles.backBtn} onPress={() => setStep("list")}>
             <Feather name="chevron-left" size={22} color="#231F29" />
           </Pressable>
-          <Text style={styles.title}>Top Doctors</Text>
+          <Text style={styles.title}>Choose Doctor</Text>
           <View style={{ width: 40 }} />
         </View>
 
-        {doctors.map((doctor) => (
-          <Pressable key={doctor.id} onPress={() => selectDoctor(doctor)}>
-            <GlassCard style={styles.doctorCard}>
-              <View style={styles.docAvatar}>
-                <Text style={styles.docAvatarText}>
-                  {doctor.full_name.charAt(0).toUpperCase()}
-                </Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.docName}>{doctor.full_name}</Text>
-                <Text style={styles.docSpec}>
-                  {doctor.specialization || "Gynecologist"}
-                </Text>
-                <View style={styles.docMetaRow}>
-                  <Feather name="star" size={12} color="#E53F8F" />
-                  <Text style={styles.docMetaText}>4.7</Text>
-                  <Feather name="map-pin" size={12} color="#7F7486" style={{ marginLeft: 8 }} />
-                  <Text style={styles.docMetaText}>800m away</Text>
+        {doctors.length ? (
+          doctors.map((doctor) => (
+            <Pressable key={doctor.id} onPress={() => void selectDoctor(doctor)}>
+              <GlassCard style={styles.doctorListCard}>
+                <View style={styles.doctorAvatarSquare}>
+                  <Text style={styles.doctorAvatarText}>
+                    {doctor.full_name.charAt(0).toUpperCase()}
+                  </Text>
                 </View>
-              </View>
-            </GlassCard>
-          </Pressable>
-        ))}
-
-        {doctors.length === 0 && (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.doctorName}>{doctor.full_name}</Text>
+                  <Text style={styles.doctorRole}>{doctorMetaText(doctor)}</Text>
+                  <View style={styles.doctorMetaRow}>
+                    <Feather name="star" size={13} color="#E53F8F" />
+                    <Text style={styles.doctorMetaText}>4.7</Text>
+                    <Feather name="map-pin" size={13} color="#8A7E94" />
+                    <Text style={styles.doctorMetaText}>800m away</Text>
+                  </View>
+                </View>
+              </GlassCard>
+            </Pressable>
+          ))
+        ) : (
           <GlassCard>
-            <Text style={styles.empty}>No doctors available.</Text>
+            <Text style={styles.empty}>
+              {loading ? "Loading doctors..." : "No doctors available."}
+            </Text>
           </GlassCard>
         )}
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
       </AppScreen>
     );
   }
 
-  // ==== DOCTOR DETAIL / SLOT PICKER ====
-  if (step === "detail" && selectedDoctor) {
-    return (
-      <AppScreen>
-        <View style={styles.headerRow}>
-          <Pressable style={styles.backBtn} onPress={() => setStep("doctors")}>
-            <Feather name="chevron-left" size={22} color="#231F29" />
-          </Pressable>
-          <Text style={styles.title}>Doctor Detail</Text>
-          <View style={{ width: 40 }} />
-        </View>
+  if (!selectedDoctor) {
+    return null;
+  }
 
-        <GlassCard style={styles.detailCard}>
-          <View style={styles.docAvatarLarge}>
-            <Text style={styles.docAvatarLargeText}>
-              {selectedDoctor.full_name.charAt(0).toUpperCase()}
-            </Text>
+  return (
+    <AppScreen>
+      <View style={styles.headerRow}>
+        <Pressable style={styles.backBtn} onPress={() => setStep("doctors")}>
+          <Feather name="chevron-left" size={22} color="#231F29" />
+        </Pressable>
+        <Text style={styles.title}>Book appointment</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <GlassCard style={styles.detailDoctorCard}>
+        <View style={styles.doctorAvatarSquare}>
+          <Text style={styles.doctorAvatarText}>
+            {selectedDoctor.full_name.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.doctorName}>{selectedDoctor.full_name}</Text>
+          <Text style={styles.doctorRole}>{doctorMetaText(selectedDoctor)}</Text>
+          <View style={styles.doctorMetaRow}>
+            <Feather name="star" size={13} color="#E53F8F" />
+            <Text style={styles.doctorMetaText}>4.7</Text>
+            <Feather name="map-pin" size={13} color="#8A7E94" />
+            <Text style={styles.doctorMetaText}>800m away</Text>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.docName}>{selectedDoctor.full_name}</Text>
-            <Text style={styles.docSpec}>
-              {selectedDoctor.specialization || "Gynecologist"}
-            </Text>
-            <View style={styles.docMetaRow}>
-              <Feather name="star" size={12} color="#E53F8F" />
-              <Text style={styles.docMetaText}>4.7</Text>
-              <Feather name="map-pin" size={12} color="#7F7486" style={{ marginLeft: 8 }} />
-              <Text style={styles.docMetaText}>800m away</Text>
-            </View>
-          </View>
-        </GlassCard>
-
-        <Text style={styles.sectionTitle}>About</Text>
-        <Text style={styles.aboutText}>
-          {selectedDoctor.bio ||
-            "Dedicated specialist focused on women's health and personalized care."}
-        </Text>
-
-        {/* Date strip */}
-        <View style={styles.dateStrip}>
-          {weekStrip.map((d) => {
-            const active = d.date === selectedDate;
-            return (
-              <Pressable
-                key={d.date}
-                onPress={() => changeDate(d.date)}
-                style={[styles.dateCell, active && styles.dateCellActive]}
-              >
-                <Text style={[styles.dateWeekday, active && styles.dateTextActive]}>
-                  {d.weekday}
-                </Text>
-                <Text style={[styles.dateDay, active && styles.dateTextActive]}>
-                  {d.day}
-                </Text>
-              </Pressable>
-            );
-          })}
         </View>
+      </GlassCard>
 
-        {/* Slots grid */}
-        <View style={styles.slotGrid}>
-          {availableSlots.length ? (
-            availableSlots.map((slot) => {
-              const active = selectedSlot === slot.start_time;
-              return (
-                <Pressable
-                  key={slot.start_time}
-                  onPress={() => setSelectedSlot(slot.start_time)}
-                  style={[styles.slot, active && styles.slotActive]}
-                >
-                  <Text style={[styles.slotText, active && styles.slotTextActive]}>
-                    {formatTime(slot.start_time)}
-                  </Text>
-                </Pressable>
-              );
-            })
-          ) : (
-            <Text style={styles.empty}>No slots available for this date.</Text>
-          )}
-        </View>
+      <Text style={styles.sectionTitle}>About</Text>
+      <Text style={styles.aboutText}>
+        {selectedDoctor.bio ||
+          "10 years of experience. Specialization in reproductive health."}
+      </Text>
 
-        {/* Symptoms */}
-        <Text style={styles.sectionTitle}>Symptoms (optional)</Text>
-        <View style={styles.chipRow}>
-          {symptoms.map((s) => {
-            const active = symptomSet.has(s.id);
-            return (
-              <Pressable
-                key={s.id}
-                onPress={() =>
-                  setSelectedSymptoms((c) =>
-                    active ? c.filter((id) => id !== s.id) : [...c, s.id]
-                  )
-                }
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                  {s.name}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <AppInput label="Reason" value={reason} onChangeText={setReason} />
-
-        <PrimaryButton label="Book Appointment" onPress={book} disabled={!selectedSlot} />
-
-        {/* Success modal */}
-        <Modal visible={showSuccess} transparent animationType="fade">
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <View style={styles.successIcon}>
-                <Feather name="check" size={32} color="#E53F8F" />
-              </View>
-              <Text style={styles.successTitle}>Booking Success</Text>
-              <Text style={styles.successText}>
-                Your booking has been successful, you can have a consultation session with your trusted doctor
+      <View style={styles.dateRow}>
+        {weekStrip.map((day) => {
+          const active = day.date === selectedDate;
+          return (
+            <Pressable
+              key={day.date}
+              onPress={() => void changeDate(day.date)}
+              style={[styles.dateCard, active && styles.dateCardActive]}
+            >
+              <Text style={[styles.dateWeekday, active && styles.dateTextActive]}>
+                {day.weekday}
               </Text>
-              <PrimaryButton label="Back to Home" onPress={backToHome} />
-            </View>
-          </View>
-        </Modal>
-      </AppScreen>
-    );
-  }
+              <Text style={[styles.dateDay, active && styles.dateTextActive]}>{day.day}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
-  return null;
+      <View style={styles.slotGrid}>
+        {availableSlots.length ? (
+          availableSlots.map((slot) => {
+            const active = selectedSlotId === slot.id;
+            return (
+              <Pressable
+                key={slot.id}
+                onPress={() => !booking && setSelectedSlotId(slot.id)}
+                disabled={booking}
+                style={[styles.slotPill, active && styles.slotPillActive, booking && styles.slotPillDisabled]}
+              >
+                <Text style={[styles.slotText, active && styles.slotTextActive]}>
+                  {formatTime(slot.start_time)}
+                </Text>
+              </Pressable>
+            );
+          })
+        ) : (
+          <GlassCard style={styles.emptySlotsCard}>
+            <Text style={styles.empty}>
+              {loadingSlots ? "Loading available slots..." : "No available slots"}
+            </Text>
+          </GlassCard>
+        )}
+      </View>
+
+      <Text style={styles.sectionTitle}>Symptoms (optional)</Text>
+      <View style={styles.symptomWrap}>
+        {symptoms.map((symptom) => {
+          const active = symptomSet.has(symptom.id);
+          return (
+            <Pressable
+              key={symptom.id}
+              onPress={() =>
+                setSelectedSymptoms((current) =>
+                  active
+                    ? current.filter((symptomId) => symptomId !== symptom.id)
+                    : [...current, symptom.id]
+                )
+              }
+              style={[styles.symptomChip, active && styles.symptomChipActive]}
+            >
+              <Text style={[styles.symptomText, active && styles.symptomTextActive]}>
+                {symptom.name}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <AppInput
+        label="Reason"
+        value={reason}
+        onChangeText={setReason}
+        placeholder="Add a short note for the doctor"
+      />
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <PrimaryButton
+        label="Book Appointment"
+        onPress={book}
+        disabled={!selectedSlotId || booking}
+        loading={booking}
+      />
+    </AppScreen>
+  );
 }
 
 function statusColor(status: string) {
@@ -405,134 +449,263 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  title: { fontSize: 22, fontWeight: "800", color: "#231F29" },
+  title: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  helper: {
+    fontSize: 12,
+    color: "#8A7E94",
+  },
+  addPill: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#FCE4EF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   backBtn: {
     width: 40,
     height: 40,
     alignItems: "center",
     justifyContent: "center",
   },
-  bellPill: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#FCE4EF",
+  heroCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 18,
+  },
+  heroIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
-  },
-  bookCta: { flexDirection: "row", alignItems: "center", gap: 12 },
-  ctaIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
     backgroundColor: "#E53F8F",
-    alignItems: "center",
-    justifyContent: "center",
   },
-  ctaTitle: { fontSize: 14, fontWeight: "800", color: "#231F29" },
-  ctaMeta: { fontSize: 12, color: "#7F7486", marginTop: 2 },
-  sectionHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  sectionTitle: { fontSize: 16, fontWeight: "800", color: "#231F29" },
-  apptCard: { flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 0 },
-  statusBar: { width: 4, alignSelf: "stretch", borderRadius: 2, marginRight: 4 },
-  apptDate: { fontSize: 14, fontWeight: "800", color: "#231F29" },
-  apptTime: { fontSize: 12, color: "#E53F8F", marginTop: 2, fontWeight: "700" },
-  apptReason: { fontSize: 12, color: "#7F7486", marginTop: 4 },
-  statusChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
-  statusText: { fontSize: 11, fontWeight: "700", textTransform: "capitalize" },
-  cancelText: { fontSize: 11, color: "#E25555", fontWeight: "700" },
-  doctorCard: { flexDirection: "row", alignItems: "center", gap: 12 },
-  docAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
-    backgroundColor: "#FCE4EF",
-    alignItems: "center",
-    justifyContent: "center",
+  heroTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#231F29",
   },
-  docAvatarText: { fontSize: 22, fontWeight: "800", color: "#E53F8F" },
-  docAvatarLarge: {
-    width: 72,
-    height: 72,
+  heroMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#8A7E94",
+  },
+  sectionHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  appointmentCard: {
+    gap: 14,
+  },
+  appointmentTop: {
+    flexDirection: "row",
+    gap: 14,
+    alignItems: "center",
+  },
+  appointmentAvatar: {
+    width: 58,
+    height: 58,
     borderRadius: 16,
     backgroundColor: "#FCE4EF",
     alignItems: "center",
     justifyContent: "center",
   },
-  docAvatarLargeText: { fontSize: 28, fontWeight: "800", color: "#E53F8F" },
-  docName: { fontSize: 15, fontWeight: "800", color: "#231F29" },
-  docSpec: { fontSize: 12, color: "#7F7486", marginTop: 2 },
-  docMetaRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 },
-  docMetaText: { fontSize: 11, color: "#7F7486", fontWeight: "600" },
-  detailCard: { flexDirection: "row", gap: 12 },
-  aboutText: { fontSize: 12, color: "#7F7486", lineHeight: 18 },
-  dateStrip: { flexDirection: "row", gap: 6 },
-  dateCell: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    gap: 4,
+  appointmentAvatarText: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#E53F8F",
   },
-  dateCellActive: { backgroundColor: "#E53F8F" },
-  dateWeekday: { fontSize: 11, color: "#7F7486", fontWeight: "700" },
-  dateDay: { fontSize: 16, color: "#231F29", fontWeight: "800" },
-  dateTextActive: { color: "#FFFFFF" },
-  slotGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  slot: {
-    paddingHorizontal: 16,
+  appointmentName: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  appointmentSub: {
+    marginTop: 3,
+    fontSize: 13,
+    color: "#8A7E94",
+  },
+  appointmentTime: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#5E5564",
+    fontWeight: "600",
+  },
+  statusPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "capitalize",
+  },
+  inlineAction: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: "#FFFFFF",
-    minWidth: 90,
+    backgroundColor: "#FBE7E7",
+  },
+  inlineActionText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#B44747",
+  },
+  doctorListCard: {
+    flexDirection: "row",
+    gap: 16,
     alignItems: "center",
   },
-  slotActive: { backgroundColor: "#E53F8F" },
-  slotText: { color: "#231F29", fontWeight: "700", fontSize: 12 },
-  slotTextActive: { color: "#FFFFFF" },
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#FFF6FA",
-    borderWidth: 1,
-    borderColor: "#F0DCE7",
+  detailDoctorCard: {
+    flexDirection: "row",
+    gap: 18,
+    alignItems: "center",
   },
-  chipActive: { backgroundColor: "#E53F8F", borderColor: "#E53F8F" },
-  chipText: { color: "#7F7486", fontWeight: "600", fontSize: 12 },
-  chipTextActive: { color: "#FFFFFF" },
-  empty: { color: "#7F7486", fontSize: 13 },
-  error: { color: "#E25555" },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(35,31,41,0.6)",
+  doctorAvatarSquare: {
+    width: 96,
+    height: 96,
+    borderRadius: 24,
+    backgroundColor: "#FAD9E6",
     alignItems: "center",
     justifyContent: "center",
-    padding: 32,
   },
-  modalCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 28,
+  doctorAvatarText: {
+    fontSize: 44,
+    fontWeight: "800",
+    color: "#E53F8F",
+  },
+  doctorName: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  doctorRole: {
+    marginTop: 4,
+    fontSize: 14,
+    color: "#6F6475",
+  },
+  doctorMetaRow: {
+    flexDirection: "row",
     alignItems: "center",
-    gap: 14,
+    gap: 6,
+    marginTop: 8,
+    flexWrap: "wrap",
+  },
+  doctorMetaText: {
+    fontSize: 13,
+    color: "#6F6475",
+    fontWeight: "600",
+  },
+  aboutText: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: "#6F6475",
+  },
+  dateRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  dateCard: {
+    flex: 1,
+    minHeight: 92,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  dateCardActive: {
+    backgroundColor: "#E53F8F",
+  },
+  dateWeekday: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#7B7082",
+  },
+  dateDay: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  dateTextActive: {
+    color: "#FFFFFF",
+  },
+  slotGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  slotPill: {
+    width: "30.5%",
+    minHeight: 54,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  slotPillActive: {
+    backgroundColor: "#E53F8F",
+  },
+  slotPillDisabled: {
+    opacity: 0.65,
+  },
+  slotText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#231F29",
+  },
+  slotTextActive: {
+    color: "#FFFFFF",
+  },
+  emptySlotsCard: {
     width: "100%",
   },
-  successIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#FCE4EF",
-    alignItems: "center",
-    justifyContent: "center",
+  symptomWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
-  successTitle: { fontSize: 20, fontWeight: "800", color: "#231F29" },
-  successText: {
+  symptomChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 999,
+    backgroundColor: "#FFF8FB",
+    borderWidth: 1,
+    borderColor: "#ECD6E2",
+  },
+  symptomChipActive: {
+    backgroundColor: "#E53F8F",
+    borderColor: "#E53F8F",
+  },
+  symptomText: {
     fontSize: 13,
-    color: "#7F7486",
-    textAlign: "center",
-    lineHeight: 20,
+    fontWeight: "600",
+    color: "#7B7082",
+  },
+  symptomTextActive: {
+    color: "#FFFFFF",
+  },
+  empty: {
+    fontSize: 14,
+    color: "#8A7E94",
+  },
+  error: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#E25555",
   },
 });

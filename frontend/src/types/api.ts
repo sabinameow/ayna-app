@@ -141,8 +141,23 @@ export type Recommendation = {
 };
 
 export type AvailableSlot = {
+  id: string;
+  doctor_id: string;
+  date: string;
   start_time: string;
   end_time: string;
+};
+
+export type DoctorAvailabilitySlot = {
+  id: string;
+  doctor_id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  is_booked: boolean;
+  appointment_id?: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Appointment = {
@@ -155,6 +170,15 @@ export type Appointment = {
   notes?: string | null;
   selected_symptom_ids?: string[] | null;
   required_tests?: string[] | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  slot_id?: string | null;
+  slot_date?: string | null;
+  slot_start_time?: string | null;
+  slot_end_time?: string | null;
+  patient_name?: string | null;
+  doctor_name?: string | null;
 };
 
 export type NotificationItem = {

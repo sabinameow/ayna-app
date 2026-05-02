@@ -1,27 +1,26 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.exceptions import BadRequestException, NotFoundException
+from backend.app.core.permissions import require_patient
 from backend.app.database import get_db
+from backend.app.models.appointment import Appointment
 from backend.app.models.doctor import Doctor
 from backend.app.models.user import User
-from backend.app.models.appointment import Appointment
-from backend.app.core.permissions import require_patient
-from backend.app.core.exceptions import NotFoundException, BadRequestException
-from backend.app.schemas.appointment import (
-    AppointmentCreate, AppointmentOut, AvailableSlot,
-)
+from backend.app.schemas.appointment import AppointmentCreate, AppointmentOut, AvailableSlot
 from backend.app.schemas.doctor import DoctorOut
-from backend.app.services.cycle_service import get_patient_by_user_id
 from backend.app.services.appointment_service import (
+    book_appointment_for_slot,
+    cancel_appointment_record,
     get_available_slots,
-    get_required_tests,
-    notify_appointment_cancelled,
-    notify_appointment_created,
+    serialize_appointment,
+    serialize_appointments,
 )
+from backend.app.services.cycle_service import get_patient_by_user_id
 
 router = APIRouter(tags=["Appointments"])
 
@@ -36,19 +35,47 @@ async def list_available_doctors(db: AsyncSession = Depends(get_db)):
     return list(result.scalars().all())
 
 
-@router.get("/doctors/{doctor_id}/available-slots", response_model=list[AvailableSlot])
+@router.get("/patient/doctors", response_model=list[DoctorOut])
+async def list_patient_doctors(
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db),
+):
+    _ = current_user
+    return await list_available_doctors(db)
+
+
+@router.get(
+    "/doctors/{doctor_id}/available-slots",
+    response_model=list[AvailableSlot],
+)
 async def available_slots(
     doctor_id: uuid.UUID,
     date: date = Query(...),
     current_user: User = Depends(require_patient()),
     db: AsyncSession = Depends(get_db),
 ):
+    _ = current_user
+    return await get_available_slots(db, doctor_id, date)
+
+
+@router.get(
+    "/patient/doctors/{doctor_id}/availability",
+    response_model=list[AvailableSlot],
+)
+async def patient_doctor_availability(
+    doctor_id: uuid.UUID,
+    date: date = Query(...),
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db),
+):
+    _ = current_user
     return await get_available_slots(db, doctor_id, date)
 
 
 @router.post("/patient/appointments", response_model=AppointmentOut, status_code=201)
 async def book_appointment(
     body: AppointmentCreate,
+    response: Response,
     current_user: User = Depends(require_patient()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -56,25 +83,17 @@ async def book_appointment(
     if not patient:
         raise NotFoundException("Patient profile not found")
 
-
-    required_tests = []
-    symptom_ids = body.selected_symptom_ids or []
-    if symptom_ids:
-        required_tests = await get_required_tests(db, [str(s) for s in symptom_ids])
-
-    appointment = Appointment(
-        patient_id=patient.id,
-        doctor_id=body.doctor_id,
-        scheduled_at=body.scheduled_at,
+    appointment, created = await book_appointment_for_slot(
+        db,
+        patient=patient,
+        slot_id=body.slot_id,
         reason=body.reason,
         notes=body.notes,
-        selected_symptom_ids=[str(s) for s in symptom_ids],
-        required_tests=required_tests,
+        symptom_ids=body.selected_symptom_ids,
     )
-    db.add(appointment)
-    await db.flush()
-    await notify_appointment_created(db, appointment)
-    return appointment
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return await serialize_appointment(db, appointment)
 
 
 @router.get("/patient/appointments", response_model=list[AppointmentOut])
@@ -91,7 +110,7 @@ async def list_appointments(
         .where(Appointment.patient_id == patient.id)
         .order_by(Appointment.scheduled_at.desc())
     )
-    return list(result.scalars().all())
+    return await serialize_appointments(db, list(result.scalars().all()))
 
 
 @router.delete("/patient/appointments/{appointment_id}", status_code=204)
@@ -111,12 +130,10 @@ async def cancel_appointment(
         )
     )
     appointment = result.scalar_one_or_none()
-
     if not appointment:
         raise NotFoundException("Appointment not found")
     if appointment.status in ("cancelled", "completed"):
         raise BadRequestException("Cannot cancel this appointment")
 
-    appointment.status = "cancelled"
-    await db.flush()
-    await notify_appointment_cancelled(db, appointment, actor_role="patient")
+    await cancel_appointment_record(db, appointment, actor_role="patient")
+    return None

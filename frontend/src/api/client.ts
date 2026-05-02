@@ -8,6 +8,7 @@ import type {
   Cycle,
   CycleDay,
   CyclePrediction,
+  DoctorAvailabilitySlot,
   DoctorProfile,
   ManagerProfile,
   Medication,
@@ -27,7 +28,7 @@ import type {
 } from "@/types/api";
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   token?: string | null;
   body?: unknown;
 };
@@ -133,6 +134,7 @@ export const api = {
       body: payload,
     }),
   listDoctors: () => request<DoctorProfile[]>("/api/v1/doctors"),
+  patientDoctors: (token: string) => request<DoctorProfile[]>("/api/v1/patient/doctors", { token }),
   cyclePrediction: (token: string) =>
     request<CyclePrediction>("/api/v1/patient/cycles/predictions", { token }),
   listCycles: (token: string) => request<Cycle[]>("/api/v1/patient/cycles", { token }),
@@ -220,8 +222,7 @@ export const api = {
   createAppointment: (
     token: string,
     payload: {
-      doctor_id: string;
-      scheduled_at: string;
+      slot_id: string;
       reason?: string;
       notes?: string;
       selected_symptom_ids?: string[];
@@ -238,9 +239,10 @@ export const api = {
       token,
     }),
   availableSlots: (token: string, doctorId: string, date: string) =>
-    request<AvailableSlot[]>(`/api/v1/doctors/${doctorId}/available-slots?date=${date}`, {
-      token,
-    }),
+    request<AvailableSlot[]>(
+      `/api/v1/patient/doctors/${doctorId}/availability?date=${date}`,
+      { token }
+    ),
   notifications: (token: string) =>
     request<NotificationItem[]>("/api/v1/notifications", { token }),
   unreadNotifications: (token: string) =>
@@ -307,6 +309,35 @@ export const api = {
     }),
   doctorAppointments: (token: string) =>
     request<Appointment[]>("/api/v1/doctor/appointments", { token }),
+  updateDoctorAppointmentStatus: (
+    token: string,
+    appointmentId: string,
+    payload: { status: string; notes?: string }
+  ) =>
+    request<Appointment>(`/api/v1/doctor/appointments/${appointmentId}/status`, {
+      method: "PATCH",
+      token,
+      body: payload,
+    }),
+  doctorAvailability: (token: string, date?: string) =>
+    request<DoctorAvailabilitySlot[]>(
+      `/api/v1/doctor/availability${date ? `?date=${encodeURIComponent(date)}` : ""}`,
+      { token }
+    ),
+  createDoctorAvailability: (
+    token: string,
+    payload: { date: string; start_time: string; end_time: string }
+  ) =>
+    request<DoctorAvailabilitySlot>("/api/v1/doctor/availability", {
+      method: "POST",
+      token,
+      body: payload,
+    }),
+  deleteDoctorAvailability: (token: string, slotId: string) =>
+    request<void>(`/api/v1/doctor/availability/${slotId}`, {
+      method: "DELETE",
+      token,
+    }),
   doctorSchedule: (token: string) =>
     request<Schedule[]>("/api/v1/doctor/schedule", { token }),
   updateDoctorSchedule: (

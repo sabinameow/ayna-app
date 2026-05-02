@@ -7,7 +7,7 @@ from backend.app.models.mood import MoodEntry
 from backend.app.models.symptom import Symptom, PatientSymptom
 from backend.app.models.test_requirement import SymptomTestMapping
 from backend.app.models.medication import Medication, MedicationLog
-from backend.app.models.appointment import DoctorSchedule, Appointment
+from backend.app.models.appointment import DoctorAvailabilitySlot, DoctorSchedule, Appointment
 from backend.app.models.recommendation import DoctorRecommendation
 from backend.app.models.chat import ChatSession, ChatMessage
 from backend.app.models.subscription import SubscriptionPlan, Subscription

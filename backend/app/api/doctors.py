@@ -1,6 +1,7 @@
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,16 +9,21 @@ from backend.app.database import get_db
 from backend.app.models.user import User
 from backend.app.models.doctor import Doctor
 from backend.app.models.patient import Patient
-from backend.app.models.appointment import Appointment, DoctorSchedule
+from backend.app.models.appointment import Appointment, DoctorAvailabilitySlot, DoctorSchedule
 from backend.app.models.cycle import MenstrualCycle
 from backend.app.models.mood import MoodEntry
 from backend.app.models.symptom import PatientSymptom
 from backend.app.models.medication import Medication, MedicationLog
 from backend.app.models.recommendation import DoctorRecommendation
 from backend.app.core.permissions import require_doctor
-from backend.app.core.exceptions import NotFoundException, ForbiddenException
+from backend.app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException
 from backend.app.schemas.doctor import DoctorOut, ScheduleOut, ScheduleUpdate
-from backend.app.schemas.appointment import AppointmentOut
+from backend.app.schemas.appointment import (
+    AppointmentOut,
+    AppointmentUpdate,
+    DoctorAvailabilityCreate,
+    DoctorAvailabilityOut,
+)
 from backend.app.schemas.patient import PatientOut
 from backend.app.schemas.cycle import CycleOut
 from backend.app.schemas.symptom import PatientSymptomOut
@@ -28,6 +34,14 @@ from backend.app.services.notification_service import (
     build_notification_dedupe_key,
     create_notification,
     get_patient_user_id,
+)
+from backend.app.services.appointment_service import (
+    create_availability_slot,
+    delete_availability_slot,
+    list_doctor_availability,
+    serialize_appointment,
+    serialize_appointments,
+    update_appointment_status_record,
 )
 
 
@@ -351,6 +365,48 @@ async def update_schedule(
     return new_schedules
 
 
+@router.post("/availability", response_model=DoctorAvailabilityOut, status_code=201)
+async def create_doctor_availability(
+    body: DoctorAvailabilityCreate,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    doctor = await _get_doctor(db, current_user.id)
+    return await create_availability_slot(
+        db,
+        doctor_id=doctor.id,
+        slot_date=body.date,
+        start_time=body.start_time,
+        end_time=body.end_time,
+    )
+
+
+@router.get("/availability", response_model=list[DoctorAvailabilityOut])
+async def get_doctor_availability(
+    date: date | None = Query(default=None),
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    doctor = await _get_doctor(db, current_user.id)
+    return await list_doctor_availability(
+        db,
+        doctor_id=doctor.id,
+        target_date=date,
+        include_booked=True,
+    )
+
+
+@router.delete("/availability/{slot_id}", status_code=204)
+async def remove_doctor_availability(
+    slot_id: uuid.UUID,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    doctor = await _get_doctor(db, current_user.id)
+    await delete_availability_slot(db, doctor_id=doctor.id, slot_id=slot_id)
+    return None
+
+
 
 @router.get("/appointments", response_model=list[AppointmentOut])
 async def list_doctor_appointments(
@@ -363,4 +419,34 @@ async def list_doctor_appointments(
         .where(Appointment.doctor_id == doctor.id)
         .order_by(Appointment.scheduled_at.desc())
     )
-    return list(result.scalars().all())
+    return await serialize_appointments(db, list(result.scalars().all()))
+
+
+@router.patch("/appointments/{appointment_id}/status", response_model=AppointmentOut)
+async def update_doctor_appointment_status(
+    appointment_id: uuid.UUID,
+    body: AppointmentUpdate,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.status is None:
+        raise BadRequestException("Status is required")
+
+    doctor = await _get_doctor(db, current_user.id)
+    result = await db.execute(
+        select(Appointment).where(
+            Appointment.id == appointment_id,
+            Appointment.doctor_id == doctor.id,
+        )
+    )
+    appointment = result.scalar_one_or_none()
+    if not appointment:
+        raise NotFoundException("Appointment not found")
+
+    updated = await update_appointment_status_record(
+        db,
+        appointment=appointment,
+        status=body.status,
+        notes=body.notes,
+    )
+    return await serialize_appointment(db, updated)
