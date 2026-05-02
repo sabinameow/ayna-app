@@ -37,6 +37,21 @@ class DoctorAvailabilityOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LabRecommendation(BaseModel):
+    name: str
+    reason: str
+    priority: Optional[str] = None
+
+
+class LabRecommendationRequest(BaseModel):
+    symptoms: list[str]
+
+
+class LabRecommendationResponse(BaseModel):
+    recommendations: list[LabRecommendation]
+    disclaimer: str
+
+
 class AppointmentCreate(BaseModel):
     slot_id: uuid.UUID
     reason: Optional[str] = None
@@ -52,8 +67,10 @@ class AppointmentOut(BaseModel):
     status: AppointmentStatus
     reason: Optional[str] = None
     notes: Optional[str] = None
-    selected_symptom_ids: Optional[list] = None
-    required_tests: Optional[list] = None
+    selected_symptom_ids: Optional[list[str]] = None
+    required_tests: Optional[list[LabRecommendation]] = None
+    symptom_names: Optional[list[str]] = None
+    lab_recommendations: Optional[list[LabRecommendation]] = None
     is_active: bool = True
     created_at: datetime
     updated_at: datetime
@@ -63,6 +80,7 @@ class AppointmentOut(BaseModel):
     slot_end_time: Optional[time] = None
     patient_name: Optional[str] = None
     doctor_name: Optional[str] = None
+    doctor_specialization: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

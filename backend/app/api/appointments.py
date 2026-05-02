@@ -12,7 +12,12 @@ from backend.app.models.appointment import Appointment
 from backend.app.models.doctor import Doctor
 from backend.app.models.user import User
 from backend.app.schemas.appointment import AppointmentCreate, AppointmentOut, AvailableSlot
+from backend.app.schemas.appointment import (
+    LabRecommendationRequest,
+    LabRecommendationResponse,
+)
 from backend.app.schemas.doctor import DoctorOut
+from backend.app.services.lab_recommendation_service import DISCLAIMER, get_lab_recommendations
 from backend.app.services.appointment_service import (
     book_appointment_for_slot,
     cancel_appointment_record,
@@ -72,6 +77,21 @@ async def patient_doctor_availability(
     return await get_available_slots(db, doctor_id, date)
 
 
+@router.post(
+    "/patient/appointments/lab-recommendations",
+    response_model=LabRecommendationResponse,
+)
+async def appointment_lab_recommendations(
+    body: LabRecommendationRequest,
+    current_user: User = Depends(require_patient()),
+):
+    _ = current_user
+    return LabRecommendationResponse(
+        recommendations=get_lab_recommendations(body.symptoms),
+        disclaimer=DISCLAIMER,
+    )
+
+
 @router.post("/patient/appointments", response_model=AppointmentOut, status_code=201)
 async def book_appointment(
     body: AppointmentCreate,
@@ -111,6 +131,29 @@ async def list_appointments(
         .order_by(Appointment.scheduled_at.desc())
     )
     return await serialize_appointments(db, list(result.scalars().all()))
+
+
+@router.get("/patient/appointments/{appointment_id}", response_model=AppointmentOut)
+async def get_patient_appointment(
+    appointment_id: uuid.UUID,
+    current_user: User = Depends(require_patient()),
+    db: AsyncSession = Depends(get_db),
+):
+    patient = await get_patient_by_user_id(db, current_user.id)
+    if not patient:
+        raise NotFoundException("Patient profile not found")
+
+    result = await db.execute(
+        select(Appointment).where(
+            Appointment.id == appointment_id,
+            Appointment.patient_id == patient.id,
+        )
+    )
+    appointment = result.scalar_one_or_none()
+    if not appointment:
+        raise NotFoundException("Appointment not found")
+
+    return await serialize_appointment(db, appointment)
 
 
 @router.delete("/patient/appointments/{appointment_id}", status_code=204)

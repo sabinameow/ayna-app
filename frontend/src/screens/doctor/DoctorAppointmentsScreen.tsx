@@ -131,6 +131,8 @@ export function DoctorAppointmentsScreen() {
         filtered.map((appointment) => {
           const isToday = new Date(appointment.scheduled_at).toDateString() === todayStr;
           const isUpdating = updatingId === appointment.id;
+          const symptomNames = appointment.symptom_names ?? [];
+          const suggestedLabs = appointment.lab_recommendations ?? appointment.required_tests ?? [];
           return (
             <GlassCard key={appointment.id} style={[styles.card, isToday && styles.cardToday]}>
               <View style={styles.cardTop}>
@@ -164,6 +166,33 @@ export function DoctorAppointmentsScreen() {
                 <View style={styles.notesRow}>
                   <Feather name="message-square" size={14} color="#7F7486" />
                   <Text style={styles.notesText}>{appointment.notes}</Text>
+                </View>
+              ) : null}
+
+              {symptomNames.length ? (
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoTitle}>Patient symptoms</Text>
+                  <View style={styles.tagWrap}>
+                    {symptomNames.map((symptomName) => (
+                      <View key={symptomName} style={styles.infoTag}>
+                        <Text style={styles.infoTagText}>{symptomName}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
+              {suggestedLabs.length ? (
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoTitle}>Suggested pre-visit tests</Text>
+                  <View style={styles.labList}>
+                    {suggestedLabs.map((lab) => (
+                      <View key={lab.name} style={styles.labItem}>
+                        <Text style={styles.labName}>{lab.name}</Text>
+                        <Text style={styles.labReason}>{lab.reason}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
               ) : null}
 
@@ -355,6 +384,29 @@ const styles = StyleSheet.create({
   reasonText: { color: "#231F29", fontWeight: "600", fontSize: 14, flex: 1 },
   notesRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 },
   notesText: { color: "#7F7486", fontSize: 13, flex: 1 },
+  infoSection: { marginTop: 12, gap: 8 },
+  infoTitle: { fontSize: 13, fontWeight: "800", color: "#231F29" },
+  tagWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  infoTag: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#FFF8FB",
+    borderWidth: 1,
+    borderColor: "#ECD6E2",
+  },
+  infoTagText: { fontSize: 12, fontWeight: "600", color: "#7F7486" },
+  labList: { gap: 8 },
+  labItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: "#F8FAFF",
+    borderWidth: 1,
+    borderColor: "#D9E1FF",
+  },
+  labName: { fontSize: 13, fontWeight: "800", color: "#231F29" },
+  labReason: { marginTop: 4, fontSize: 12, lineHeight: 18, color: "#7F7486" },
   actionsRow: { flexDirection: "row", gap: 8, marginTop: 14, flexWrap: "wrap" },
   empty: { color: "#7F7486", fontSize: 14 },
   error: { color: "#E25555", fontSize: 13 },

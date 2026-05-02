@@ -22,9 +22,17 @@ if not parsed_database_url.hostname or "neon.tech" not in parsed_database_url.ho
 engine = create_async_engine(
     database_url,
     echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_recycle=300,
-    connect_args={"ssl": ssl_context},
+    pool_pre_ping=False,
+    pool_recycle=1800,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_use_lifo=True,
+    connect_args={
+        "ssl": ssl_context,
+        "timeout": 30,
+        "command_timeout": 30,
+    },
 )
 
 AsyncSessionLocal = async_sessionmaker(

@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import React, { useCallback, useMemo, useState } from "react";
+import { useNavigation } from "@react-navigation/native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { api } from "@/api/client";
@@ -13,10 +14,36 @@ import { useToast } from "@/context/ToastContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import { useNotifications } from "@/hooks/useNotifications";
 import { saveFeedbackLabel, useSaveFeedback } from "@/hooks/useSaveFeedback";
-import type { Appointment, AvailableSlot, DoctorProfile, Symptom } from "@/types/api";
+import type {
+  Appointment,
+  AvailableSlot,
+  DoctorProfile,
+  LabRecommendation,
+  Symptom,
+} from "@/types/api";
 import { formatDate, formatTime } from "@/utils/format";
 
 type Step = "list" | "doctors" | "detail";
+
+function normalizeSymptomKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function dedupeSymptomsCatalog(items: Symptom[]) {
+  const uniqueSymptoms: Symptom[] = [];
+  const seenNames = new Set<string>();
+
+  for (const symptom of items) {
+    const key = normalizeSymptomKey(symptom.name);
+    if (seenNames.has(key)) {
+      continue;
+    }
+    seenNames.add(key);
+    uniqueSymptoms.push(symptom);
+  }
+
+  return uniqueSymptoms;
+}
 
 function buildWeekStrip(base: Date) {
   return Array.from({ length: 6 }, (_, index) => {
@@ -34,7 +61,23 @@ function doctorMetaText(doctor: DoctorProfile) {
   return doctor.specialization || "Gynecologist";
 }
 
+function statusLabel(status: string) {
+  switch (status) {
+    case "confirmed":
+      return "Confirmed";
+    case "pending":
+      return "Pending";
+    case "cancelled":
+      return "Cancelled";
+    case "completed":
+      return "Completed";
+    default:
+      return status;
+  }
+}
+
 export function PatientAppointmentsScreen() {
+  const navigation = useNavigation<any>();
   const { accessToken } = useAuth();
   const { showToast } = useToast();
   const { refreshUnread } = useNotifications();
@@ -49,8 +92,12 @@ export function PatientAppointmentsScreen() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
+  const [labRecommendations, setLabRecommendations] = useState<LabRecommendation[]>([]);
+  const [labDisclaimer, setLabDisclaimer] = useState("");
+  const [labWarning, setLabWarning] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [booking, setBooking] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const bookingFeedback = useSaveFeedback();
@@ -67,9 +114,9 @@ export function PatientAppointmentsScreen() {
       ]);
       setDoctors(nextDoctors);
       setAppointments(nextAppointments);
-      setSymptoms(nextSymptoms.slice(0, 8));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load appointments");
+      setSymptoms(dedupeSymptomsCatalog(nextSymptoms));
+    } catch {
+      setError("Could not load appointments.");
     } finally {
       setLoading(false);
     }
@@ -84,9 +131,9 @@ export function PatientAppointmentsScreen() {
       try {
         const slots = await api.availableSlots(accessToken, doctorId, dateValue);
         setAvailableSlots(slots);
-      } catch (err) {
+      } catch {
         setAvailableSlots([]);
-        setError(err instanceof Error ? err.message : "Could not load available slots");
+        setError("Could not load available slots.");
       } finally {
         setLoadingSlots(false);
       }
@@ -97,6 +144,11 @@ export function PatientAppointmentsScreen() {
   async function selectDoctor(doctor: DoctorProfile) {
     setSelectedDoctor(doctor);
     setSelectedSlotId(null);
+    setSelectedSymptoms([]);
+    setReason("");
+    setLabRecommendations([]);
+    setLabDisclaimer("");
+    setLabWarning("");
     setStep("detail");
     await loadSlots(doctor.id, selectedDate);
   }
@@ -124,12 +176,20 @@ export function PatientAppointmentsScreen() {
       setReason("");
       setSelectedSymptoms([]);
       setSelectedSlotId(null);
+      setLabRecommendations([]);
+      setLabDisclaimer("");
+      setLabWarning("");
       setSelectedDoctor(null);
       setStep("list");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to book appointment";
       setError(message);
       bookingFeedback.markError();
+      if (err instanceof api.error && err.status === 409) {
+        showToast("This slot is already booked", "error");
+      } else {
+        showToast("Failed to book appointment", "error");
+      }
     } finally {
       setBooking(false);
     }
@@ -141,18 +201,76 @@ export function PatientAppointmentsScreen() {
     setError("");
     try {
       await api.cancelAppointment(accessToken, id);
-      showToast("Deleted", "success");
+      showToast("Appointment cancelled", "success");
       await Promise.all([load(), refreshUnread()]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to cancel appointment");
-      showToast("Something went wrong", "error");
+    } catch {
+      setError("Could not cancel appointment.");
+      showToast("Could not cancel appointment", "error");
     } finally {
       setCancellingId(null);
     }
   }
 
   const symptomSet = useMemo(() => new Set(selectedSymptoms), [selectedSymptoms]);
+  const symptomNameById = useMemo(
+    () => new Map(symptoms.map((symptom) => [symptom.id, symptom.name])),
+    [symptoms]
+  );
+  const selectedSymptomNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          selectedSymptoms
+            .map((symptomId) => symptomNameById.get(symptomId))
+            .filter((value): value is string => Boolean(value))
+        )
+      ),
+    [selectedSymptoms, symptomNameById]
+  );
   const weekStrip = useMemo(() => buildWeekStrip(new Date()), []);
+
+  useEffect(() => {
+    if (!accessToken || !selectedSymptoms.length) {
+      setLabRecommendations([]);
+      setLabDisclaimer("");
+      setLabWarning("");
+      setLoadingRecommendations(false);
+      return;
+    }
+
+    if (!selectedSymptomNames.length) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingRecommendations(true);
+    setLabWarning("");
+    setLabRecommendations([]);
+    setLabDisclaimer("");
+
+    void api
+      .appointmentLabRecommendations(accessToken, { symptoms: selectedSymptomNames })
+      .then((response) => {
+        if (cancelled) return;
+        setLabRecommendations(response.recommendations);
+        setLabDisclaimer(response.disclaimer);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLabRecommendations([]);
+        setLabDisclaimer("");
+        setLabWarning("Could not load lab recommendations. You can still continue booking.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingRecommendations(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, selectedSymptomNames, selectedSymptoms.length]);
 
   if (step === "list") {
     return (
@@ -173,55 +291,63 @@ export function PatientAppointmentsScreen() {
               <Feather name="calendar" size={22} color="#FFFFFF" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.heroTitle}>Book a new appointment</Text>
-              <Text style={styles.heroMeta}>Choose a doctor and lock a real slot</Text>
+              <Text style={styles.heroTitle}>Book an appointment</Text>
+              <Text style={styles.heroMeta}>Choose a doctor and pick an open slot</Text>
             </View>
             <Feather name="chevron-right" size={20} color="#E53F8F" />
           </GlassCard>
         </Pressable>
 
         <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>My booked appointments</Text>
+          <Text style={styles.sectionTitle}>My appointments</Text>
           {loading ? <Text style={styles.helper}>Loading...</Text> : null}
         </View>
 
         {appointments.length ? (
           appointments.map((appointment) => (
-            <GlassCard key={appointment.id} style={styles.appointmentCard}>
-              <View style={styles.appointmentTop}>
-                <View style={styles.appointmentAvatar}>
-                  <Text style={styles.appointmentAvatarText}>
-                    {(appointment.doctor_name || "D").charAt(0).toUpperCase()}
-                  </Text>
+            <Pressable
+              key={appointment.id}
+              onPress={() => navigation.navigate("AppointmentDetail", { appointmentId: appointment.id })}
+            >
+              <GlassCard style={styles.appointmentCard}>
+                <View style={styles.appointmentTop}>
+                  <View style={styles.appointmentAvatar}>
+                    <Text style={styles.appointmentAvatarText}>
+                      {(appointment.doctor_name || "D").charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.appointmentName}>
+                      {appointment.doctor_name || "Doctor"}
+                    </Text>
+                    <Text style={styles.appointmentSub}>{appointment.reason || "General consultation"}</Text>
+                    <Text style={styles.appointmentTime}>
+                      {formatDate(appointment.scheduled_at)} · {formatTime(appointment.scheduled_at.slice(11, 16))}
+                    </Text>
+                  </View>
+                  <View style={[styles.statusPill, { backgroundColor: statusBg(appointment.status) }]}>
+                    <Text style={[styles.statusText, { color: statusColor(appointment.status) }]}>
+                      {statusLabel(appointment.status)}
+                    </Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.appointmentName}>
-                    {appointment.doctor_name || "Doctor"}
-                  </Text>
-                  <Text style={styles.appointmentSub}>{appointment.reason || "General consultation"}</Text>
-                  <Text style={styles.appointmentTime}>
-                    {formatDate(appointment.scheduled_at)} · {formatTime(appointment.scheduled_at.slice(11, 16))}
-                  </Text>
-                </View>
-                <View style={[styles.statusPill, { backgroundColor: statusBg(appointment.status) }]}>
-                  <Text style={[styles.statusText, { color: statusColor(appointment.status) }]}>
-                    {appointment.status}
-                  </Text>
-                </View>
-              </View>
 
-              {(appointment.status === "pending" || appointment.status === "confirmed") ? (
-                <Pressable
-                  onPress={() => void cancelAppointment(appointment.id)}
-                  disabled={cancellingId === appointment.id}
-                  style={styles.inlineAction}
-                >
-                  <Text style={styles.inlineActionText}>
-                    {cancellingId === appointment.id ? "Cancelling..." : "Cancel appointment"}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </GlassCard>
+                {(appointment.status === "pending" || appointment.status === "confirmed") ? (
+                  <Pressable
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      void cancelAppointment(appointment.id);
+                    }}
+                    disabled={cancellingId === appointment.id}
+                    style={styles.inlineAction}
+                  >
+                    <Text style={styles.inlineActionText}>
+                      {cancellingId === appointment.id ? "Cancelling..." : "Cancel appointment"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </GlassCard>
+            </Pressable>
           ))
         ) : (
           <GlassCard>
@@ -243,7 +369,7 @@ export function PatientAppointmentsScreen() {
           <Pressable style={styles.backBtn} onPress={() => setStep("list")}>
             <Feather name="chevron-left" size={22} color="#231F29" />
           </Pressable>
-          <Text style={styles.title}>Choose Doctor</Text>
+          <Text style={styles.title}>Choose doctor</Text>
           <View style={{ width: 40 }} />
         </View>
 
@@ -394,6 +520,38 @@ export function PatientAppointmentsScreen() {
         onChangeText={setReason}
         placeholder="Add a short note for the doctor"
       />
+
+      {selectedSymptoms.length ? (
+        <GlassCard style={styles.recommendationCard}>
+          <Text style={styles.recommendationTitle}>Take these tests before your visit</Text>
+          <Text style={styles.recommendationSubtitle}>
+            Based on the symptoms you selected, these tests may be helpful before your visit.
+          </Text>
+
+          {loadingRecommendations ? (
+            <Text style={styles.recommendationHelper}>Loading suggestions...</Text>
+          ) : labWarning ? (
+            <Text style={styles.recommendationWarning}>{labWarning}</Text>
+          ) : labRecommendations.length ? (
+            <View style={styles.recommendationList}>
+              {labRecommendations.map((recommendation) => (
+                <View key={recommendation.name} style={styles.recommendationItem}>
+                  <Text style={styles.recommendationName}>{recommendation.name}</Text>
+                  <Text style={styles.recommendationReason}>{recommendation.reason}</Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.recommendationHelper}>
+              No specific pre-visit tests suggested based on selected symptoms.
+            </Text>
+          )}
+
+          {!loadingRecommendations && !labWarning && labDisclaimer ? (
+            <Text style={styles.recommendationDisclaimer}>{labDisclaimer}</Text>
+          ) : null}
+        </GlassCard>
+      ) : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -697,6 +855,57 @@ const styles = StyleSheet.create({
   },
   symptomTextActive: {
     color: "#FFFFFF",
+  },
+  recommendationCard: {
+    gap: 12,
+  },
+  recommendationTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  recommendationSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#6F6475",
+  },
+  recommendationList: {
+    gap: 10,
+  },
+  recommendationItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: "#FFF8FB",
+    borderWidth: 1,
+    borderColor: "#F2D8E4",
+  },
+  recommendationName: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#231F29",
+  },
+  recommendationReason: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#6F6475",
+  },
+  recommendationHelper: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#6F6475",
+  },
+  recommendationWarning: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#C56A1A",
+    fontWeight: "600",
+  },
+  recommendationDisclaimer: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#8A7E94",
   },
   empty: {
     fontSize: 14,

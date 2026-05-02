@@ -86,13 +86,6 @@ export function LoginScreen({ navigation }: Props) {
       <Pressable onPress={() => navigation.navigate("Register")}>
         <Text style={styles.link}>New patient? Create an account</Text>
       </Pressable>
-
-      <View style={styles.hintBox}>
-        <Text style={styles.hintTitle}>Seed accounts</Text>
-        <Text style={styles.hintText}>Patient: `patient1@ayna.app / Patient1Pass`</Text>
-        <Text style={styles.hintText}>Doctor: `doctor1@ayna.app / Doctor1Pass`</Text>
-        <Text style={styles.hintText}>Manager: `manager@ayna.app / Manager1Pass`</Text>
-      </View>
     </AppScreen>
   );
 }

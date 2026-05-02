@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.constants import AppointmentStatus
@@ -9,8 +9,12 @@ from backend.app.core.exceptions import BadRequestException, ConflictException, 
 from backend.app.models.appointment import Appointment, DoctorAvailabilitySlot, DoctorSchedule
 from backend.app.models.doctor import Doctor
 from backend.app.models.patient import Patient
-from backend.app.models.test_requirement import SymptomTestMapping
+from backend.app.models.symptom import Symptom
 from backend.app.schemas.appointment import AppointmentOut, AvailableSlot
+from backend.app.services.lab_recommendation_service import (
+    get_lab_recommendations,
+    normalize_lab_recommendation_records,
+)
 from backend.app.services.notification_service import (
     build_notification_dedupe_key,
     create_notification,
@@ -29,7 +33,7 @@ async def get_doctor_schedule(db: AsyncSession, doctor_id: uuid.UUID) -> list[Do
 
 def _validate_slot_range(start_time: time, end_time: time) -> None:
     if start_time >= end_time:
-        raise BadRequestException("Slot end time must be after start time")
+        raise BadRequestException("End time must be later than start time")
 
 
 def _slot_scheduled_at(slot: DoctorAvailabilitySlot) -> datetime:
@@ -147,26 +151,28 @@ async def delete_availability_slot(
     await db.flush()
 
 
-async def get_required_tests(db: AsyncSession, symptom_ids: list[str]) -> list[dict]:
-    if not symptom_ids:
+def _parse_symptom_ids(symptom_ids: list[str] | None) -> list[uuid.UUID]:
+    parsed_ids: list[uuid.UUID] = []
+    for symptom_id in symptom_ids or []:
+        try:
+            parsed_ids.append(uuid.UUID(str(symptom_id)))
+        except (ValueError, TypeError):
+            continue
+    return parsed_ids
+
+
+async def get_symptom_names_by_ids(
+    db: AsyncSession,
+    symptom_ids: list[str] | None,
+) -> list[str]:
+    parsed_ids = _parse_symptom_ids(symptom_ids)
+    if not parsed_ids:
         return []
 
     result = await db.execute(
-        select(SymptomTestMapping)
-        .where(SymptomTestMapping.symptom_id.in_(symptom_ids))
-        .order_by(SymptomTestMapping.priority)
+        select(Symptom).where(Symptom.id.in_(parsed_ids)).order_by(Symptom.name.asc())
     )
-    mappings = result.scalars().all()
-
-    return [
-        {
-            "test_name": mapping.test_name,
-            "test_description": mapping.test_description,
-            "is_mandatory": mapping.is_mandatory,
-            "priority": mapping.priority,
-        }
-        for mapping in mappings
-    ]
+    return [symptom.name for symptom in result.scalars().all()]
 
 
 async def _get_appointment_context(
@@ -214,11 +220,19 @@ async def serialize_appointments(
         if slot.appointment_id is not None
     }
 
+    symptom_names_by_appointment_id: dict[uuid.UUID, list[str]] = {}
+    for appointment in appointments:
+        symptom_names_by_appointment_id[appointment.id] = await get_symptom_names_by_ids(
+            db,
+            appointment.selected_symptom_ids,
+        )
+
     serialized: list[AppointmentOut] = []
     for appointment in appointments:
         slot = slots_by_appointment_id.get(appointment.id)
         patient = patients.get(appointment.patient_id)
         doctor = doctors.get(appointment.doctor_id)
+        lab_recommendations = normalize_lab_recommendation_records(appointment.required_tests) or None
         serialized.append(
             AppointmentOut(
                 id=appointment.id,
@@ -229,7 +243,9 @@ async def serialize_appointments(
                 reason=appointment.reason,
                 notes=appointment.notes,
                 selected_symptom_ids=appointment.selected_symptom_ids,
-                required_tests=appointment.required_tests,
+                required_tests=lab_recommendations,
+                symptom_names=symptom_names_by_appointment_id.get(appointment.id) or None,
+                lab_recommendations=lab_recommendations,
                 is_active=appointment.is_active,
                 created_at=appointment.created_at,
                 updated_at=appointment.updated_at,
@@ -239,6 +255,7 @@ async def serialize_appointments(
                 slot_end_time=slot.end_time if slot else None,
                 patient_name=patient.full_name if patient else None,
                 doctor_name=doctor.full_name if doctor else None,
+                doctor_specialization=doctor.specialization if doctor else None,
             )
         )
     return serialized
@@ -296,8 +313,9 @@ async def book_appointment_for_slot(
 
     required_tests: list[dict] = []
     serialized_symptom_ids = [str(symptom_id) for symptom_id in (symptom_ids or [])]
-    if serialized_symptom_ids:
-        required_tests = await get_required_tests(db, serialized_symptom_ids)
+    symptom_names = await get_symptom_names_by_ids(db, serialized_symptom_ids)
+    if symptom_names:
+        required_tests = get_lab_recommendations(symptom_names)
 
     appointment = Appointment(
         patient_id=patient.id,

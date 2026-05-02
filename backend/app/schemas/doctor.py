@@ -11,9 +11,16 @@ class DoctorOut(BaseModel):
     full_name: str
     specialization: Optional[str] = None
     bio: Optional[str] = None
+    avatar_url: Optional[str] = None
     is_available: bool
 
     model_config = {"from_attributes": True}
+
+
+class DoctorProfileUpdate(BaseModel):
+    specialization: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class ScheduleSlot(BaseModel):

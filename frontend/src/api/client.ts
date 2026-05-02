@@ -10,6 +10,7 @@ import type {
   CyclePrediction,
   DoctorAvailabilitySlot,
   DoctorProfile,
+  LabRecommendationResponse,
   ManagerProfile,
   Medication,
   MedicationLog,
@@ -234,6 +235,8 @@ export const api = {
     request<ProgressSummary>("/api/v1/patient/progress", { token }),
   patientAppointments: (token: string) =>
     request<Appointment[]>("/api/v1/patient/appointments", { token }),
+  patientAppointment: (token: string, appointmentId: string) =>
+    request<Appointment>(`/api/v1/patient/appointments/${appointmentId}`, { token }),
   createAppointment: (
     token: string,
     payload: {
@@ -244,6 +247,12 @@ export const api = {
     }
   ) =>
     request<Appointment>("/api/v1/patient/appointments", {
+      method: "POST",
+      token,
+      body: payload,
+    }),
+  appointmentLabRecommendations: (token: string, payload: { symptoms: string[] }) =>
+    request<LabRecommendationResponse>("/api/v1/patient/appointments/lab-recommendations", {
       method: "POST",
       token,
       body: payload,

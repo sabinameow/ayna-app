@@ -17,7 +17,7 @@ from backend.app.models.medication import Medication, MedicationLog
 from backend.app.models.recommendation import DoctorRecommendation
 from backend.app.core.permissions import require_doctor
 from backend.app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException
-from backend.app.schemas.doctor import DoctorOut, ScheduleOut, ScheduleUpdate
+from backend.app.schemas.doctor import DoctorOut, DoctorProfileUpdate, ScheduleOut, ScheduleUpdate
 from backend.app.schemas.appointment import (
     AppointmentOut,
     AppointmentUpdate,
@@ -75,6 +75,20 @@ async def get_profile(
     db: AsyncSession = Depends(get_db),
 ):
     return await _get_doctor(db, current_user.id)
+
+
+@router.patch("/profile", response_model=DoctorOut)
+async def update_profile(
+    body: DoctorProfileUpdate,
+    current_user: User = Depends(require_doctor()),
+    db: AsyncSession = Depends(get_db),
+):
+    doctor = await _get_doctor(db, current_user.id)
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(doctor, field, value)
+    await db.commit()
+    await db.refresh(doctor)
+    return doctor
 
 
 

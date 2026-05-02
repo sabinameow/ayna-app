@@ -16,10 +16,24 @@ from backend.app.services.cycle_service import get_patient_by_user_id
 router = APIRouter(prefix="/symptoms", tags=["Symptoms"])
 
 
+def _normalize_symptom_key(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
 @router.get("/symptoms", response_model=list[SymptomOut])
 async def list_symptoms(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Symptom).order_by(Symptom.category, Symptom.name))
-    return list(result.scalars().all())
+    unique_symptoms: list[Symptom] = []
+    seen_names: set[str] = set()
+
+    for symptom in result.scalars().all():
+        normalized_name = _normalize_symptom_key(symptom.name)
+        if normalized_name in seen_names:
+            continue
+        seen_names.add(normalized_name)
+        unique_symptoms.append(symptom)
+
+    return unique_symptoms
 
 
 @router.post("/patient/symptoms", response_model=PatientSymptomOut, status_code=201)

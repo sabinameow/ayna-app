@@ -21,6 +21,7 @@ import { NotificationsScreen } from "@/screens/NotificationsScreen";
 import { MedicationDetailScreen } from "@/screens/patient/MedicationDetailScreen";
 import { MedicationListScreen } from "@/screens/patient/MedicationListScreen";
 import { ArticleScreen } from "@/screens/patient/ArticleScreen";
+import { PatientAppointmentDetailScreen } from "@/screens/patient/PatientAppointmentDetailScreen";
 import { PatientAppointmentsScreen } from "@/screens/patient/PatientAppointmentsScreen";
 import { PatientReportScreen } from "@/screens/patient/PatientReportScreen";
 import { PatientChatScreen } from "@/screens/patient/PatientChatScreen";
@@ -142,6 +143,7 @@ export function AppNavigator() {
       ) : user.role === "patient" ? (
         <>
           <Stack.Screen name="PatientTabs" component={PatientTabs} />
+          <Stack.Screen name="AppointmentDetail" component={PatientAppointmentDetailScreen} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} />
           <Stack.Screen name="Article" component={ArticleScreen} />
           <Stack.Screen name="Medications" component={MedicationListScreen} />

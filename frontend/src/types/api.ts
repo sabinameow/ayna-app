@@ -148,6 +148,17 @@ export type AvailableSlot = {
   end_time: string;
 };
 
+export type LabRecommendation = {
+  name: string;
+  reason: string;
+  priority?: "low" | "medium" | "high" | null;
+};
+
+export type LabRecommendationResponse = {
+  recommendations: LabRecommendation[];
+  disclaimer: string;
+};
+
 export type DoctorAvailabilitySlot = {
   id: string;
   doctor_id: string;
@@ -169,7 +180,9 @@ export type Appointment = {
   reason?: string | null;
   notes?: string | null;
   selected_symptom_ids?: string[] | null;
-  required_tests?: string[] | null;
+  required_tests?: LabRecommendation[] | null;
+  symptom_names?: string[] | null;
+  lab_recommendations?: LabRecommendation[] | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -179,6 +192,7 @@ export type Appointment = {
   slot_end_time?: string | null;
   patient_name?: string | null;
   doctor_name?: string | null;
+  doctor_specialization?: string | null;
 };
 
 export type NotificationItem = {
