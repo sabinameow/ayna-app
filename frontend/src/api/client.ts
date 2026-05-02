@@ -380,6 +380,8 @@ export const api = {
   managerSchedules: (token: string) =>
     request<Schedule[]>("/api/v1/manager/schedules", { token }),
   articles: (token: string) => request<Article[]>("/api/v1/articles", { token }),
+  article: (token: string, articleId: string) =>
+    request<Article>(`/api/v1/articles/${articleId}`, { token }),
   makePatientChatSocket: (token: string) =>
     `${WS_BASE_URL}/api/v1/ws/chat?token=${encodeURIComponent(token)}`,
   makeManagerChatSocket: (token: string, sessionId: string) =>
