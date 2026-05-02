@@ -27,7 +27,7 @@ function newClientId() {
   return `c_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// ── Session list item ─────────────────────────────────────────────────────────
+
 function SessionCard({
   session,
   active,
@@ -90,7 +90,7 @@ const sCardStyles = StyleSheet.create({
   badgeTextClosed: { color: "#7F7486" },
 });
 
-// ── Message bubble ────────────────────────────────────────────────────────────
+
 function MessageBubble({
   message,
   isManager,
@@ -137,7 +137,8 @@ const bubbleStyles = StyleSheet.create({
   timeManager: { color: "rgba(255,255,255,0.7)" },
 });
 
-// ── Main screen ───────────────────────────────────────────────────────────────
+
+
 export function ManagerChatsScreen() {
   const { accessToken, user } = useAuth();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -161,7 +162,6 @@ export function ManagerChatsScreen() {
   }, [accessToken]);
   useFocusReload(loadSessions);
 
-  // Load history for the selected session
   useEffect(() => {
     if (!accessToken || !selectedId) {
       setMessages([]);
@@ -195,8 +195,6 @@ export function ManagerChatsScreen() {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, []);
 
-  // URL keyed on selectedId (string), not the session object — prevents
-  // socket churn when the same session reference changes after an update.
   const socketUrl = useMemo(
     () => (accessToken && selectedId ? api.makeManagerChatSocket(accessToken, selectedId) : null),
     [accessToken, selectedId]
@@ -239,7 +237,6 @@ export function ManagerChatsScreen() {
   const openCount = sessions.filter((s) => s.status === "active").length;
   const closedCount = sessions.filter((s) => s.status === "closed").length;
 
-  // ── Thread view ─────────────────────────────────────────────────────────
   if (selected) {
     const isOpen = selected.status === "active";
     return (
@@ -332,7 +329,6 @@ export function ManagerChatsScreen() {
     );
   }
 
-  // ── Session list ─────────────────────────────────────────────────────────
   return (
     <AppScreen>
       <View style={styles.listHeader}>

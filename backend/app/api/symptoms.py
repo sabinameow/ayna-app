@@ -11,10 +11,7 @@ from backend.app.core.permissions import require_patient
 from backend.app.core.exceptions import NotFoundException
 from backend.app.schemas.symptom import SymptomOut, PatientSymptomCreate, PatientSymptomOut
 from backend.app.services.cycle_service import get_patient_by_user_id
-from backend.app.services.notification_service import (
-    build_notification_dedupe_key,
-    create_notification,
-)
+
 
 router = APIRouter(prefix="/symptoms", tags=["Symptoms"])
 
@@ -44,21 +41,6 @@ async def log_symptom(
     )
     db.add(entry)
     await db.flush()
-    await create_notification(
-        db,
-        user_id=current_user.id,
-        role="patient",
-        type="symptom.saved",
-        title="Saved successfully",
-        message=f"Symptom data for {body.date.isoformat()} was saved.",
-        metadata={"patient_symptom_id": str(entry.id), "patient_id": str(patient.id)},
-        dedupe_key=build_notification_dedupe_key(
-            "symptom.saved",
-            patient.id,
-            body.symptom_id,
-            body.date,
-        ),
-    )
     return entry
 
 
