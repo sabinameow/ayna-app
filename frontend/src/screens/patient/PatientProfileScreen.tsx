@@ -12,10 +12,10 @@ import { useAuth } from "@/context/AuthContext";
 import { useFocusReload } from "@/hooks/useFocusReload";
 import type { PatientProfile, ProgressSummary } from "@/types/api";
 
-type MenuRoute = "PatientCycle" | "PatientAppointments" | "PatientChat" | null;
+type MenuRoute = "PatientCycle" | "PatientAppointments" | "PatientChat" | "PatientReport" | null;
 
 const MENU_ITEMS: { icon: keyof typeof Feather.glyphMap; label: string; route: MenuRoute }[] = [
-  { icon: "file-text", label: "Reports", route: "PatientCycle" },
+  { icon: "file-text", label: "Reports", route: "PatientReport" },
   { icon: "calendar", label: "Appointments", route: "PatientAppointments" },
   { icon: "message-circle", label: "Chat support", route: "PatientChat" },
   { icon: "shield", label: "Privacy & Data", route: null },
