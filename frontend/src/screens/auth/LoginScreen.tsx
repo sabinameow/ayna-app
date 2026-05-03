@@ -61,7 +61,6 @@ export function LoginScreen({ navigation }: Props) {
         <Text style={styles.subtitle}>
           Sign in to access your patient, doctor, or manager workspace.
         </Text>
-        <Text style={styles.apiHint}>API: {API_BASE_URL}</Text>
         <AppInput
           label="Email"
           value={email}
