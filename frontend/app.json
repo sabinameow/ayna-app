@@ -12,12 +12,11 @@
       "supportsTablet": false
     },
     "android": {
+      "package": "com.ayna.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#FDF5F8"
       }
-    },
-    "extra": {
-      "apiUrl": "http://127.0.0.1:8000"
     },
     "plugins": [
       "expo-font"
