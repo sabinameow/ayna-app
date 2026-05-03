@@ -38,28 +38,6 @@ coordinate chats, appointments, and schedules.
 └── README.md
 ```
 
-## Environment Files
-
-Real environment files are intentionally ignored by Git:
-
-- `backend/.env`
-- `frontend/.env`
-- any other `.env.*` file
-
-Use the examples as templates:
-
-```bash
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
-```
-
-Do not commit real secrets. If a real `.env` was previously tracked, remove it from the Git index
-without deleting the local file:
-
-```bash
-git rm --cached backend/.env frontend/.env
-```
-
 ## Backend Environment Variables
 
 Required for the API:
@@ -94,13 +72,6 @@ features continue to work with deterministic fallback text.
 EXPO_PUBLIC_API_URL=http://127.0.0.1:8000
 ```
 
-For a physical phone on the same Wi-Fi network, set this to your machine's LAN address, for example:
-
-```env
-EXPO_PUBLIC_API_URL=http://192.168.1.50:8000
-```
-
-For production mobile builds, point it to the Render backend URL.
 
 ## Local Backend Setup
 
@@ -152,33 +123,7 @@ Seeded test accounts:
 | Patient | patient3@ayna.app | Patient3Pass |
 | Manager | manager@ayna.app | Manager1Pass |
 
-## Docker Compose
 
-Docker Compose is for local development and production-like smoke testing. It runs the backend and
-a local Redis instance. The database remains external through `DATABASE_URL`.
-
-Start the API:
-
-```bash
-docker compose up --build backend
-```
-
-Start the API with Celery worker and beat:
-
-```bash
-docker compose --profile workers up --build
-```
-
-Run migrations inside the backend image:
-
-```bash
-docker compose run --rm backend alembic --config backend/alembic.ini upgrade head
-```
-
-Check the compose file:
-
-```bash
-docker compose config
 ```
 
 ## Frontend Setup
@@ -202,62 +147,5 @@ Type-check:
 npm run typecheck
 ```
 
-## Deploy Backend to Render
-
-Render should deploy the backend as a Docker web service. The repository includes:
-
-- `backend/Dockerfile` - builds and starts the FastAPI service.
-- `render.yaml` - Render Blueprint for the backend service.
-- `docker-compose.yml` - local-only compose workflow.
-
-Recommended Render setup:
-
-1. Push the repo to GitHub/GitLab/Bitbucket.
-2. In Render, create a new Blueprint from `render.yaml`, or create a Docker Web Service manually.
-3. Use `backend/Dockerfile` with repository root as the Docker build context.
-4. Set required environment variables in Render:
-   - `DATABASE_URL`
-   - `REDIS_URL`
-   - `JWT_SECRET_KEY`
-   - mail variables
-   - optional `GEMINI_API_KEY`
-5. Use `/health` as the health check path.
-6. Run migrations before deploy with:
-
-```bash
-PYTHONPATH=. alembic --config backend/alembic.ini upgrade head
-```
-
-The included `render.yaml` sets this as `preDeployCommand`.
-
-## Background Jobs on Render
-
-The API can run without Celery, but scheduled notifications, email tasks, and daily AI jobs require
-workers. On Render, create separate worker services from the same Dockerfile with these commands:
-
-```bash
-celery -A backend.app.celery_app worker --loglevel=info
-celery -A backend.app.celery_app beat --loglevel=info
-```
-
-Use the same environment variables as the backend service.
-
-## Useful Commands
-
-```bash
-# Backend type/import sanity
-PYTHONPATH=. python -m compileall backend/app
-
-# Frontend type-check
-cd frontend && npm run typecheck
-
-# Docker config validation
-docker compose config
-```
-
-## Notes
-
-- Keep real `.env` files local.
-- Keep Render secrets in the Render dashboard.
-- Do not commit generated folders such as `node_modules`, `.expo`, caches, or local logs.
-- The mobile app should use the deployed Render backend URL in `EXPO_PUBLIC_API_URL`.
+Student_ID1: 230103040
+Student_ID2: 230103315
