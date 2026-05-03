@@ -1,0 +1,31 @@
+.git
+.claude
+.DS_Store
+
+# Secrets and local config
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Node / Expo
+frontend/node_modules/
+frontend/.expo/
+frontend/dist/
+
+# Build/runtime artifacts
+*.log
+dump.rdb
+dist/
+build/

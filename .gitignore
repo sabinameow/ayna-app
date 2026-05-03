@@ -1,5 +1,33 @@
+# Python
 venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# Node / Expo
 frontend/node_modules/
+frontend/.expo/
+frontend/dist/
+
+# Local environment files. Keep examples tracked.
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# Local/editor files
 .DS_Store
 .claude/
-backend/.env
+.idea/
+.vscode/
+
+# Runtime artifacts
+*.log
+dump.rdb
